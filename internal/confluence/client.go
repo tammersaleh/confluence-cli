@@ -196,31 +196,52 @@ type attachmentsResponse struct {
 		MediaType    string `json:"mediaType"`
 		DownloadLink string `json:"downloadLink"`
 	} `json:"results"`
+	Links struct {
+		Next string `json:"next"`
+	} `json:"_links"`
 }
 
 func (c *client) GetAttachments(ctx context.Context, pageID string) ([]Attachment, error) {
-	resp, err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/wiki/api/v2/pages/%s/attachments", pageID), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+	var allAttachments []Attachment
+	path := fmt.Sprintf("/wiki/api/v2/pages/%s/attachments", pageID)
+	query := url.Values{}
+	query.Set("limit", "250")
 
-	var result attachmentsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
-
-	attachments := make([]Attachment, len(result.Results))
-	for i, a := range result.Results {
-		attachments[i] = Attachment{
-			ID:          a.ID,
-			Title:       a.Title,
-			MediaType:   a.MediaType,
-			DownloadURL: a.DownloadLink,
+	for {
+		resp, err := c.doRequest(ctx, http.MethodGet, path, query)
+		if err != nil {
+			return nil, err
 		}
+
+		var result attachmentsResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("decoding response: %w", err)
+		}
+		resp.Body.Close()
+
+		for _, a := range result.Results {
+			allAttachments = append(allAttachments, Attachment{
+				ID:          a.ID,
+				Title:       a.Title,
+				MediaType:   a.MediaType,
+				DownloadURL: a.DownloadLink,
+			})
+		}
+
+		if result.Links.Next == "" {
+			break
+		}
+
+		nextURL, err := url.Parse(result.Links.Next)
+		if err != nil {
+			break
+		}
+		query = nextURL.Query()
+		path = nextURL.Path
 	}
 
-	return attachments, nil
+	return allAttachments, nil
 }
 
 func (c *client) DownloadAttachment(ctx context.Context, attachment Attachment) (io.ReadCloser, error) {
