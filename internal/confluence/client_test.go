@@ -93,41 +93,13 @@ func TestClient_GetSpace(t *testing.T) {
 
 func TestClient_GetPages(t *testing.T) {
 	tests := []struct {
-		name       string
-		spaceID    string
-		responses  []string
-		statusCode int
-		wantPages  []Page
-		wantErr    bool
+		name      string
+		spaceID   string
+		wantPages []Page
 	}{
 		{
-			name:    "single page response",
+			name:    "fetches parentId for each page",
 			spaceID: "12345",
-			responses: []string{`{
-				"results": [
-					{"id": "1", "title": "Page One", "parentId": ""},
-					{"id": "2", "title": "Page Two", "parentId": "1"}
-				]
-			}`},
-			statusCode: http.StatusOK,
-			wantPages: []Page{
-				{ID: "1", Title: "Page One", ParentID: ""},
-				{ID: "2", Title: "Page Two", ParentID: "1"},
-			},
-		},
-		{
-			name:    "paginated response",
-			spaceID: "12345",
-			responses: []string{
-				`{
-					"results": [{"id": "1", "title": "Page One", "parentId": ""}],
-					"_links": {"next": "/wiki/api/v2/spaces/12345/pages?cursor=abc"}
-				}`,
-				`{
-					"results": [{"id": "2", "title": "Page Two", "parentId": "1"}]
-				}`,
-			},
-			statusCode: http.StatusOK,
 			wantPages: []Page{
 				{ID: "1", Title: "Page One", ParentID: ""},
 				{ID: "2", Title: "Page Two", ParentID: "1"},
@@ -137,26 +109,31 @@ func TestClient_GetPages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			callCount := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if callCount >= len(tt.responses) {
-					t.Fatalf("unexpected call count: %d", callCount)
+				switch r.URL.Path {
+				case "/wiki/api/v2/spaces/12345/pages":
+					// List pages endpoint - returns IDs and titles only
+					w.Write([]byte(`{
+						"results": [
+							{"id": "1", "title": "Page One"},
+							{"id": "2", "title": "Page Two"}
+						]
+					}`))
+				case "/wiki/api/v2/pages/1":
+					// Individual page endpoint - returns parentId
+					w.Write([]byte(`{"id": "1", "parentId": ""}`))
+				case "/wiki/api/v2/pages/2":
+					w.Write([]byte(`{"id": "2", "parentId": "1"}`))
+				default:
+					t.Errorf("unexpected path: %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
 				}
-				w.WriteHeader(tt.statusCode)
-				w.Write([]byte(tt.responses[callCount]))
-				callCount++
 			}))
 			defer server.Close()
 
 			c := NewClient(server.URL, "test@example.com", "api-token")
 			pages, err := c.GetPages(context.Background(), tt.spaceID)
 
-			if tt.wantErr {
-				if err == nil {
-					t.Error("GetPages() expected error, got nil")
-				}
-				return
-			}
 			if err != nil {
 				t.Errorf("GetPages() unexpected error: %v", err)
 				return
@@ -171,6 +148,49 @@ func TestClient_GetPages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClient_GetPages_Paginated(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/wiki/api/v2/spaces/12345/pages" && callCount == 0:
+			callCount++
+			w.Write([]byte(`{
+				"results": [{"id": "1", "title": "Page One"}],
+				"_links": {"next": "/wiki/api/v2/spaces/12345/pages?cursor=abc"}
+			}`))
+		case r.URL.Path == "/wiki/api/v2/spaces/12345/pages" && callCount == 1:
+			callCount++
+			w.Write([]byte(`{
+				"results": [{"id": "2", "title": "Page Two"}]
+			}`))
+		case r.URL.Path == "/wiki/api/v2/pages/1":
+			w.Write([]byte(`{"id": "1", "parentId": ""}`))
+		case r.URL.Path == "/wiki/api/v2/pages/2":
+			w.Write([]byte(`{"id": "2", "parentId": "1"}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	pages, err := c.GetPages(context.Background(), "12345")
+
+	if err != nil {
+		t.Fatalf("GetPages() unexpected error: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("got %d pages, want 2", len(pages))
+	}
+	if pages[0].ParentID != "" {
+		t.Errorf("pages[0].ParentID = %q, want empty", pages[0].ParentID)
+	}
+	if pages[1].ParentID != "1" {
+		t.Errorf("pages[1].ParentID = %q, want \"1\"", pages[1].ParentID)
 	}
 }
 

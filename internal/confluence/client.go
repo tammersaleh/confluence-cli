@@ -101,13 +101,17 @@ func (c *client) GetSpace(ctx context.Context, spaceKey string) (*Space, error) 
 
 type pagesResponse struct {
 	Results []struct {
-		ID       string `json:"id"`
-		Title    string `json:"title"`
-		ParentID string `json:"parentId"`
+		ID    string `json:"id"`
+		Title string `json:"title"`
 	} `json:"results"`
 	Links struct {
 		Next string `json:"next"`
 	} `json:"_links"`
+}
+
+type pageResponse struct {
+	ID       string `json:"id"`
+	ParentID string `json:"parentId"`
 }
 
 func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
@@ -131,9 +135,8 @@ func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
 
 		for _, p := range result.Results {
 			allPages = append(allPages, Page{
-				ID:       p.ID,
-				Title:    p.Title,
-				ParentID: p.ParentID,
+				ID:    p.ID,
+				Title: p.Title,
 			})
 		}
 
@@ -150,7 +153,32 @@ func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
 		path = nextURL.Path
 	}
 
+	// The /spaces/{id}/pages endpoint doesn't reliably return parentId,
+	// so we fetch each page individually to get parent info.
+	for i := range allPages {
+		parentID, err := c.getPageParentID(ctx, allPages[i].ID)
+		if err != nil {
+			return nil, fmt.Errorf("getting parent for page %s: %w", allPages[i].ID, err)
+		}
+		allPages[i].ParentID = parentID
+	}
+
 	return allPages, nil
+}
+
+func (c *client) getPageParentID(ctx context.Context, pageID string) (string, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/wiki/api/v2/pages/%s", pageID), nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result pageResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	return result.ParentID, nil
 }
 
 type pageContentResponse struct {
