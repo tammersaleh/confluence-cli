@@ -11,16 +11,16 @@ go install github.com/tammersaleh/confluence-sync/cmd/confluence-sync@latest
 ## Usage
 
 ```
-confluence-sync <space-url> [flags]
+confluence-sync <space-url> <output-dir> [flags]
 
 Arguments:
   space-url             Confluence space URL (e.g., https://acme.atlassian.net/wiki/spaces/ENG)
+  output-dir            Output directory for synced files
 
 Flags:
-  -o, --output string   Output directory (default: ./output)
       --clean           Delete output directory before sync
       --dry-run         Show what would be synced without writing files
-  -v, --verbose         Verbose output
+  -q, --quiet           Suppress progress output
   -h, --help            Help
 ```
 
@@ -38,7 +38,7 @@ Authentication via environment variables:
 ```bash
 export ATLASSIAN_API_KEY=your-api-token
 export ATLASSIAN_API_EMAIL=user@acme.com
-confluence-sync https://acme.atlassian.net/wiki/spaces/ENG -o ./docs
+confluence-sync https://acme.atlassian.net/wiki/spaces/ENG ./docs
 ```
 
 Accepts URLs in these formats:

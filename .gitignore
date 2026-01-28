@@ -28,8 +28,9 @@ go.work.sum
 # env file
 .env
 
-# Sync output directory
+# Sync output directories
 output/
+sa/
 
 # Editor/IDE
 # .idea/

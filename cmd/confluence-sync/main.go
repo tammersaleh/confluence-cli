@@ -29,10 +29,9 @@ func (stdoutLogger) Printf(format string, args ...interface{}) {
 }
 
 var (
-	outputDir string
-	clean     bool
-	dryRun    bool
-	verbose   bool
+	clean  bool
+	dryRun bool
+	quiet  bool
 )
 
 func main() {
@@ -42,7 +41,7 @@ func main() {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "confluence-sync <space-url>",
+	Use:   "confluence-sync <space-url> <output-dir>",
 	Short: "Sync Confluence space pages to local Markdown files",
 	Long: `confluence-sync fetches all pages from a Confluence space and writes them
 as Markdown files to a local directory. The page hierarchy is preserved
@@ -53,20 +52,20 @@ Environment variables:
   ATLASSIAN_API_EMAIL  Account email for authentication
 
 Example:
-  confluence-sync https://acme.atlassian.net/wiki/spaces/ENG -o ./docs`,
-	Args: cobra.ExactArgs(1),
+  confluence-sync https://acme.atlassian.net/wiki/spaces/ENG ./docs`,
+	Args: cobra.ExactArgs(2),
 	RunE: runSync,
 }
 
 func init() {
-	rootCmd.Flags().StringVarP(&outputDir, "output", "o", "./output", "Output directory")
 	rootCmd.Flags().BoolVar(&clean, "clean", false, "Delete output directory before sync")
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be synced without writing files")
-	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
+	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress output")
 }
 
 func runSync(cmd *cobra.Command, args []string) error {
 	spaceURL := args[0]
+	outputDir := args[1]
 
 	// Parse space URL
 	baseURL, spaceKey, err := confluence.ParseSpaceURL(spaceURL)
@@ -103,14 +102,14 @@ func runSync(cmd *cobra.Command, args []string) error {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		if verbose {
+		if !quiet {
 			fmt.Fprintln(os.Stderr, "\nInterrupted, cleaning up...")
 		}
 		cancel()
 	}()
 
 	// Run sync
-	if verbose {
+	if !quiet {
 		fmt.Printf("Syncing space %s to %s\n", spaceKey, outputDir)
 		if dryRun {
 			fmt.Println("(dry-run mode)")
@@ -120,7 +119,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	opts := sync.Options{
 		Clean:   clean,
 		DryRun:  dryRun,
-		Verbose: verbose,
+		Verbose: !quiet,
 		Logger:  stdoutLogger{},
 	}
 
@@ -128,7 +127,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 		return handleError(err)
 	}
 
-	if verbose {
+	if !quiet {
 		fmt.Println("Sync complete")
 	}
 
