@@ -2,10 +2,13 @@
 go = "1.24"
 
 [tasks.build]
-run = "go build -o bin/confluence-sync ./cmd/confluence-sync"
+run = "go build -o confluence-sync ./cmd/confluence-sync"
 
 [tasks.test]
 run = "go test ./..."
+
+[tasks.check]
+depends = ["test", "build"]
 
 [tasks."test:race"]
 run = "go test -race ./..."

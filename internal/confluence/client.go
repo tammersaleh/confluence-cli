@@ -6,10 +6,41 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+const (
+	maxRetries     = 5
+	baseRetryDelay = 500 * time.Millisecond
+	maxRetryDelay  = 30 * time.Second
+)
+
+func isRetryable(statusCode int) bool {
+	switch statusCode {
+	case http.StatusTooManyRequests, // 429
+		http.StatusInternalServerError, // 500
+		http.StatusBadGateway,          // 502
+		http.StatusServiceUnavailable,  // 503
+		http.StatusGatewayTimeout:      // 504
+		return true
+	}
+	return false
+}
+
+func retryDelay(attempt int) time.Duration {
+	delay := baseRetryDelay * time.Duration(1<<uint(attempt)) // exponential: 500ms, 1s, 2s, 4s, 8s...
+	if delay > maxRetryDelay {
+		delay = maxRetryDelay
+	}
+	// Add jitter: +/- 25%
+	jitter := time.Duration(rand.Int63n(int64(delay) / 2))
+	delay = delay - delay/4 + jitter
+	return delay
+}
 
 type client struct {
 	baseURL    string
@@ -32,36 +63,57 @@ func (c *client) doRequest(ctx context.Context, method, path string, query url.V
 		u += "?" + query.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", c.authHeader)
-	req.Header.Set("Accept", "application/json")
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryDelay(attempt - 1)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
+		req, err := http.NewRequestWithContext(ctx, method, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", c.authHeader)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if isRetryable(resp.StatusCode) {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("%w: status %d", ErrAPIError, resp.StatusCode)
+			continue
+		}
+
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			resp.Body.Close()
+			return nil, ErrUnauthorized
+		case http.StatusForbidden:
+			resp.Body.Close()
+			return nil, ErrForbidden
+		case http.StatusNotFound:
+			resp.Body.Close()
+			return nil, ErrSpaceNotFound
+		}
+
+		if resp.StatusCode >= 400 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("%w: status %d", ErrAPIError, resp.StatusCode)
+		}
+
+		return resp, nil
 	}
 
-	switch resp.StatusCode {
-	case http.StatusUnauthorized:
-		resp.Body.Close()
-		return nil, ErrUnauthorized
-	case http.StatusForbidden:
-		resp.Body.Close()
-		return nil, ErrForbidden
-	case http.StatusNotFound:
-		resp.Body.Close()
-		return nil, ErrSpaceNotFound
-	}
-
-	if resp.StatusCode >= 400 {
-		resp.Body.Close()
-		return nil, fmt.Errorf("%w: status %d", ErrAPIError, resp.StatusCode)
-	}
-
-	return resp, nil
+	return nil, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
 }
 
 type spacesResponse struct {
@@ -296,21 +348,42 @@ func (c *client) DownloadAttachment(ctx context.Context, attachment Attachment) 
 	}
 	u := c.baseURL + downloadPath
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", c.authHeader)
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryDelay(attempt - 1)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", c.authHeader)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if isRetryable(resp.StatusCode) {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("%w: status %d downloading %s", ErrAPIError, resp.StatusCode, u)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("%w: status %d downloading %s", ErrAPIError, resp.StatusCode, u)
+		}
+
+		return resp.Body, nil
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("%w: status %d downloading attachment", ErrAPIError, resp.StatusCode)
-	}
-
-	return resp.Body, nil
+	return nil, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
 }
