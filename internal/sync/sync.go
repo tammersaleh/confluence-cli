@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/tammersaleh/confluence-sync/internal/confluence"
@@ -53,14 +55,8 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 		return fmt.Errorf("getting space: %w", err)
 	}
 
-	if opts.Verbose {
-		log.Printf("Found space: %s (%s)", space.Name, space.Key)
-	}
 
 	if opts.Clean && !opts.DryRun {
-		if opts.Verbose {
-			log.Printf("Cleaning output directory: %s", outputDir)
-		}
 		if err := s.fs.RemoveAll(outputDir); err != nil {
 			return fmt.Errorf("cleaning output directory: %w", err)
 		}
@@ -71,10 +67,6 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 		return fmt.Errorf("getting pages: %w", err)
 	}
 
-	if opts.Verbose {
-		log.Printf("Found %d pages", len(pages))
-	}
-
 	tree := BuildTree(pages)
 
 	st := &stats{}
@@ -82,10 +74,6 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 		if err := s.syncNode(ctx, root, outputDir, opts, log, st, nil); err != nil {
 			return err
 		}
-	}
-
-	if opts.Verbose {
-		log.Printf("Synced %d pages, %d attachments", st.pages, st.attachments)
 	}
 
 	return nil
@@ -123,9 +111,21 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 		mdPath = filepath.Join(parentDir, filename+".md")
 	}
 
-	if opts.Verbose {
-		log.Printf("  %s -> %s", node.Page.Title, mdPath)
+	// Check if local file already has the same version
+	if existing, err := s.fs.ReadFile(mdPath); err == nil {
+		if localVersion, ok := extractVersion(existing); ok && localVersion == content.Version {
+			// Version matches, skip this page but still process children
+			childUsedNames := make(map[string]bool)
+			for _, child := range node.Children {
+				if err := s.syncNode(ctx, child, pageDir, opts, log, st, childUsedNames); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 	}
+
+	log.Printf("%s", content.WebURL)
 
 	attachmentPath := ""
 	if hasAttachments {
@@ -156,9 +156,6 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 		}
 
 		for _, att := range attachments {
-			if opts.Verbose {
-				log.Printf("    attachment: %s", att.Title)
-			}
 			if err := s.downloadAttachment(ctx, att, attDir); err != nil {
 				return fmt.Errorf("downloading attachment %s: %w", att.Title, err)
 			}
@@ -189,6 +186,20 @@ func (s *Syncer) downloadAttachment(ctx context.Context, att confluence.Attachme
 	}
 
 	return s.fs.WriteFile(filepath.Join(dir, att.Title), data, 0644)
+}
+
+var versionRe = regexp.MustCompile(`(?m)^version:\s*(\d+)`)
+
+func extractVersion(data []byte) (int, bool) {
+	match := versionRe.FindSubmatch(data)
+	if match == nil {
+		return 0, false
+	}
+	v, err := strconv.Atoi(string(match[1]))
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 func buildFrontmatter(content *confluence.PageContent) string {

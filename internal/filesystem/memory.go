@@ -51,6 +51,19 @@ func (m *Memory) WriteFile(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+func (m *Memory) ReadFile(path string) ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	path = filepath.Clean(path)
+	if data, ok := m.files[path]; ok {
+		copied := make([]byte, len(data))
+		copy(copied, data)
+		return copied, nil
+	}
+	return nil, os.ErrNotExist
+}
+
 func (m *Memory) RemoveAll(path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

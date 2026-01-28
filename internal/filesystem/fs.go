@@ -7,6 +7,7 @@ import (
 type FileSystem interface {
 	MkdirAll(path string, perm os.FileMode) error
 	WriteFile(path string, data []byte, perm os.FileMode) error
+	ReadFile(path string) ([]byte, error)
 	RemoveAll(path string) error
 	Stat(path string) (os.FileInfo, error)
 }
@@ -20,6 +21,10 @@ func (OS) MkdirAll(path string, perm os.FileMode) error {
 
 func (OS) WriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(path, data, perm)
+}
+
+func (OS) ReadFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }
 
 func (OS) RemoveAll(path string) error {
