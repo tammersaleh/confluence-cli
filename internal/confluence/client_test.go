@@ -182,8 +182,11 @@ func TestClient_GetPageContent(t *testing.T) {
 		w.Write([]byte(`{
 			"id": "123",
 			"title": "My Page",
+			"authorId": "user456",
+			"createdAt": "2024-01-15T10:30:00.000Z",
 			"body": {"storage": {"value": "<p>Hello</p>"}},
-			"version": {"number": 5}
+			"version": {"number": 5, "createdAt": "2024-06-20T14:45:00.000Z", "authorId": "user789"},
+			"_links": {"webui": "/wiki/spaces/TEST/pages/123/My+Page"}
 		}`))
 	}))
 	defer server.Close()
@@ -204,6 +207,19 @@ func TestClient_GetPageContent(t *testing.T) {
 	}
 	if content.Version != 5 {
 		t.Errorf("Version = %d, want 5", content.Version)
+	}
+	if content.AuthorID != "user456" {
+		t.Errorf("AuthorID = %s, want user456", content.AuthorID)
+	}
+	if content.CreatedAt != "2024-01-15T10:30:00.000Z" {
+		t.Errorf("CreatedAt = %s, want 2024-01-15T10:30:00.000Z", content.CreatedAt)
+	}
+	if content.ModifiedAt != "2024-06-20T14:45:00.000Z" {
+		t.Errorf("ModifiedAt = %s, want 2024-06-20T14:45:00.000Z", content.ModifiedAt)
+	}
+	wantURL := server.URL + "/wiki/spaces/TEST/pages/123/My+Page"
+	if content.WebURL != wantURL {
+		t.Errorf("WebURL = %s, want %s", content.WebURL, wantURL)
 	}
 }
 

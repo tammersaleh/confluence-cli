@@ -154,16 +154,23 @@ func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
 }
 
 type pageContentResponse struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Body  struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	CreatedAt string `json:"createdAt"`
+	AuthorID  string `json:"authorId"`
+	Body      struct {
 		Storage struct {
 			Value string `json:"value"`
 		} `json:"storage"`
 	} `json:"body"`
 	Version struct {
-		Number int `json:"number"`
+		Number    int    `json:"number"`
+		CreatedAt string `json:"createdAt"`
+		AuthorID  string `json:"authorId"`
 	} `json:"version"`
+	Links struct {
+		WebUI string `json:"webui"`
+	} `json:"_links"`
 }
 
 func (c *client) GetPageContent(ctx context.Context, pageID string) (*PageContent, error) {
@@ -181,11 +188,20 @@ func (c *client) GetPageContent(ctx context.Context, pageID string) (*PageConten
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 
+	webURL := result.Links.WebUI
+	if webURL != "" && !strings.HasPrefix(webURL, "http") {
+		webURL = c.baseURL + webURL
+	}
+
 	return &PageContent{
-		ID:      result.ID,
-		Title:   result.Title,
-		Body:    result.Body.Storage.Value,
-		Version: result.Version.Number,
+		ID:         result.ID,
+		Title:      result.Title,
+		Body:       result.Body.Storage.Value,
+		Version:    result.Version.Number,
+		AuthorID:   result.AuthorID,
+		CreatedAt:  result.CreatedAt,
+		ModifiedAt: result.Version.CreatedAt,
+		WebURL:     webURL,
 	}, nil
 }
 

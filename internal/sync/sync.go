@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"github.com/tammersaleh/confluence-sync/internal/confluence"
 	"github.com/tammersaleh/confluence-sync/internal/converter"
@@ -134,6 +135,10 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 		AttachmentPath: attachmentPath,
 	})
 
+	// Prepend frontmatter
+	frontmatter := buildFrontmatter(content)
+	markdown = frontmatter + markdown
+
 	if !opts.DryRun {
 		if err := s.fs.MkdirAll(filepath.Dir(mdPath), 0755); err != nil {
 			return fmt.Errorf("creating directory: %w", err)
@@ -184,4 +189,28 @@ func (s *Syncer) downloadAttachment(ctx context.Context, att confluence.Attachme
 	}
 
 	return s.fs.WriteFile(filepath.Join(dir, att.Title), data, 0644)
+}
+
+func buildFrontmatter(content *confluence.PageContent) string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.WriteString(fmt.Sprintf("confluence_page_id: %q\n", content.ID))
+	b.WriteString(fmt.Sprintf("title: %q\n", content.Title))
+	if content.Author != "" {
+		b.WriteString(fmt.Sprintf("author: %q\n", content.Author))
+	} else if content.AuthorID != "" {
+		b.WriteString(fmt.Sprintf("author_id: %q\n", content.AuthorID))
+	}
+	if content.WebURL != "" {
+		b.WriteString(fmt.Sprintf("confluence_url: %q\n", content.WebURL))
+	}
+	b.WriteString(fmt.Sprintf("version: %d\n", content.Version))
+	if content.CreatedAt != "" {
+		b.WriteString(fmt.Sprintf("created_at: %q\n", content.CreatedAt))
+	}
+	if content.ModifiedAt != "" {
+		b.WriteString(fmt.Sprintf("modified_at: %q\n", content.ModifiedAt))
+	}
+	b.WriteString("---\n\n")
+	return b.String()
 }

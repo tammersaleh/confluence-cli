@@ -26,10 +26,15 @@ type Page struct {
 }
 
 type PageContent struct {
-	ID      string
-	Title   string
-	Body    string // Confluence storage format (XHTML)
-	Version int
+	ID         string
+	Title      string
+	Body       string // Confluence storage format (XHTML)
+	Version    int
+	Author     string // Display name of creator
+	AuthorID   string // Account ID of creator
+	CreatedAt  string // ISO 8601 timestamp
+	ModifiedAt string // ISO 8601 timestamp of last modification
+	WebURL     string // Browser URL to view the page
 }
 
 type Attachment struct {

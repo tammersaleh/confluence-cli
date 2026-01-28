@@ -297,3 +297,64 @@ func TestSync_FilenameCollisions(t *testing.T) {
 		t.Errorf("expected %d files, got %d: %v", expectedCount, len(files), files)
 	}
 }
+
+func TestSync_Frontmatter(t *testing.T) {
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "456", Title: "My Page", ParentID: ""},
+		},
+		contents: map[string]*confluence.PageContent{
+			"456": {
+				ID:         "456",
+				Title:      "My Page",
+				Body:       "<p>Hello world</p>",
+				Version:    3,
+				Author:     "John Doe",
+				AuthorID:   "user123",
+				CreatedAt:  "2024-01-15T10:30:00Z",
+				ModifiedAt: "2024-06-20T14:45:00Z",
+				WebURL:     "https://acme.atlassian.net/wiki/spaces/TEST/pages/456/My+Page",
+			},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	content := string(fs.Files()["/output/index.md"])
+
+	// Should start with YAML frontmatter
+	if !bytes.HasPrefix([]byte(content), []byte("---\n")) {
+		t.Errorf("expected file to start with YAML frontmatter, got:\n%s", content)
+	}
+
+	// Check for required metadata fields
+	checks := []string{
+		"confluence_page_id: \"456\"",
+		"title: \"My Page\"",
+		"author: \"John Doe\"",
+		"confluence_url:",
+		"version: 3",
+	}
+	for _, check := range checks {
+		if !bytes.Contains([]byte(content), []byte(check)) {
+			t.Errorf("expected frontmatter to contain %q, got:\n%s", check, content)
+		}
+	}
+
+	// Should have closing frontmatter delimiter
+	if !bytes.Contains([]byte(content), []byte("\n---\n")) {
+		t.Errorf("expected closing frontmatter delimiter, got:\n%s", content)
+	}
+
+	// Content should follow frontmatter
+	if !bytes.Contains([]byte(content), []byte("Hello world")) {
+		t.Errorf("expected body content after frontmatter, got:\n%s", content)
+	}
+}
