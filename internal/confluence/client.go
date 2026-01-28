@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 type client struct {
@@ -223,7 +224,12 @@ func (c *client) GetAttachments(ctx context.Context, pageID string) ([]Attachmen
 }
 
 func (c *client) DownloadAttachment(ctx context.Context, attachment Attachment) (io.ReadCloser, error) {
-	u := c.baseURL + attachment.DownloadURL
+	// Download URLs from the API are relative to /wiki, not the base URL
+	downloadPath := attachment.DownloadURL
+	if !strings.HasPrefix(downloadPath, "/wiki") {
+		downloadPath = "/wiki" + downloadPath
+	}
+	u := c.baseURL + downloadPath
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
