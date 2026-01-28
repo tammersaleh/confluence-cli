@@ -16,10 +16,9 @@ import (
 )
 
 type Options struct {
-	Clean   bool
-	DryRun  bool
-	Verbose bool
-	Logger  Logger
+	Clean  bool
+	DryRun bool
+	Logger Logger
 }
 
 type Logger interface {
@@ -33,11 +32,6 @@ func (noopLogger) Printf(string, ...interface{}) {}
 type Syncer struct {
 	client confluence.Client
 	fs     filesystem.FileSystem
-}
-
-type stats struct {
-	pages       int
-	attachments int
 }
 
 func New(client confluence.Client, fs filesystem.FileSystem) *Syncer {
@@ -55,7 +49,6 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 		return fmt.Errorf("getting space: %w", err)
 	}
 
-
 	if opts.Clean && !opts.DryRun {
 		if err := s.fs.RemoveAll(outputDir); err != nil {
 			return fmt.Errorf("cleaning output directory: %w", err)
@@ -69,9 +62,8 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 
 	tree := BuildTree(pages)
 
-	st := &stats{}
 	for _, root := range tree {
-		if err := s.syncNode(ctx, root, outputDir, opts, log, st, nil); err != nil {
+		if err := s.syncNode(ctx, root, outputDir, opts, log, nil); err != nil {
 			return err
 		}
 	}
@@ -79,7 +71,7 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 	return nil
 }
 
-func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string, opts Options, log Logger, st *stats, usedNames map[string]bool) error {
+func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string, opts Options, log Logger, usedNames map[string]bool) error {
 	content, err := s.client.GetPageContent(ctx, node.Page.ID)
 	if err != nil {
 		return fmt.Errorf("getting content for %s: %w", node.Page.Title, err)
@@ -117,7 +109,7 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 			// Version matches, skip this page but still process children
 			childUsedNames := make(map[string]bool)
 			for _, child := range node.Children {
-				if err := s.syncNode(ctx, child, pageDir, opts, log, st, childUsedNames); err != nil {
+				if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames); err != nil {
 					return err
 				}
 			}
@@ -147,7 +139,6 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 			return fmt.Errorf("writing %s: %w", mdPath, err)
 		}
 	}
-	st.pages++
 
 	if hasAttachments && !opts.DryRun {
 		attDir := filepath.Join(pageDir, "_attachments")
@@ -159,13 +150,12 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 			if err := s.downloadAttachment(ctx, att, attDir); err != nil {
 				return fmt.Errorf("page %s: attachment %s: %w", content.WebURL, att.Title, err)
 			}
-			st.attachments++
 		}
 	}
 
 	childUsedNames := make(map[string]bool)
 	for _, child := range node.Children {
-		if err := s.syncNode(ctx, child, pageDir, opts, log, st, childUsedNames); err != nil {
+		if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames); err != nil {
 			return err
 		}
 	}

@@ -117,10 +117,9 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := sync.Options{
-		Clean:   clean,
-		DryRun:  dryRun,
-		Verbose: !quiet,
-		Logger:  stdoutLogger{},
+		Clean:  clean,
+		DryRun: dryRun,
+		Logger: stdoutLogger{},
 	}
 
 	if err := syncer.Sync(ctx, spaceKey, outputDir, opts); err != nil {

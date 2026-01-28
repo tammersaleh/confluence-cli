@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,7 +37,7 @@ func retryDelay(attempt int) time.Duration {
 		delay = maxRetryDelay
 	}
 	// Add jitter: +/- 25%
-	jitter := time.Duration(rand.Int63n(int64(delay) / 2))
+	jitter := time.Duration(rand.Int64N(int64(delay) / 2))
 	delay = delay - delay/4 + jitter
 	return delay
 }
