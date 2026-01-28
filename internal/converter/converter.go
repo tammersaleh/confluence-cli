@@ -83,22 +83,15 @@ func (c *converter) parse(decoder *xml.Decoder) {
 	}
 }
 
-func elemName(elem xml.StartElement) string {
-	if elem.Name.Space != "" {
-		return elem.Name.Space + ":" + elem.Name.Local
+func xmlName(name xml.Name) string {
+	if name.Space != "" {
+		return name.Space + ":" + name.Local
 	}
-	return elem.Name.Local
-}
-
-func endElemName(elem xml.EndElement) string {
-	if elem.Name.Space != "" {
-		return elem.Name.Space + ":" + elem.Name.Local
-	}
-	return elem.Name.Local
+	return name.Local
 }
 
 func (c *converter) handleStart(elem xml.StartElement, decoder *xml.Decoder) {
-	name := elemName(elem)
+	name := xmlName(elem.Name)
 
 	switch name {
 	case "root":
@@ -183,7 +176,7 @@ func (c *converter) handleStart(elem xml.StartElement, decoder *xml.Decoder) {
 }
 
 func (c *converter) handleEnd(elem xml.EndElement) {
-	name := endElemName(elem)
+	name := xmlName(elem.Name)
 
 	switch name {
 	case "p":
@@ -260,13 +253,13 @@ func (c *converter) handleImage(decoder *xml.Decoder) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			depth++
-			name := elemName(t)
+			name := xmlName(t.Name)
 			if name == "ri:attachment" {
 				filename = getAttr(t.Attr, "ri:filename")
 			}
 		case xml.EndElement:
 			depth--
-			name := endElemName(t)
+			name := xmlName(t.Name)
 			if name == "ac:image" || depth == 0 {
 				imgPath := filename
 				if c.opts.AttachmentPath != "" && filename != "" {
@@ -295,7 +288,7 @@ func (c *converter) handleCodeMacro(decoder *xml.Decoder) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			depth++
-			name := elemName(t)
+			name := xmlName(t.Name)
 			if name == "ac:parameter" && getAttr(t.Attr, "ac:name") == "language" {
 				lang = c.collectInlineText(decoder, "ac:parameter")
 				depth--
@@ -305,7 +298,7 @@ func (c *converter) handleCodeMacro(decoder *xml.Decoder) {
 			}
 		case xml.EndElement:
 			depth--
-			name := endElemName(t)
+			name := xmlName(t.Name)
 			if name == "ac:structured-macro" || depth == 0 {
 				c.buf.WriteString("```" + lang + "\n")
 				c.buf.WriteString(strings.TrimSpace(code))
@@ -330,7 +323,7 @@ func (c *converter) handleTask(decoder *xml.Decoder) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			depth++
-			name := elemName(t)
+			name := xmlName(t.Name)
 			if name == "ac:task-status" {
 				status = c.collectInlineText(decoder, "ac:task-status")
 				depth--
@@ -340,7 +333,7 @@ func (c *converter) handleTask(decoder *xml.Decoder) {
 			}
 		case xml.EndElement:
 			depth--
-			name := endElemName(t)
+			name := xmlName(t.Name)
 			if name == "ac:task" || depth == 0 {
 				checkbox := "[ ]"
 				if status == "complete" {
@@ -409,7 +402,7 @@ func (c *converter) collectInlineText(decoder *xml.Decoder, endTag string) strin
 			depth++
 		case xml.EndElement:
 			depth--
-			name := endElemName(t)
+			name := xmlName(t.Name)
 			if depth == 0 || name == endTag {
 				return text.String()
 			}
