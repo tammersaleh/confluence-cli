@@ -247,6 +247,47 @@ func TestClient_GetAttachments(t *testing.T) {
 	}
 }
 
+func TestClient_GetAttachments_Paginated(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			w.Write([]byte(`{
+				"results": [
+					{"id": "att1", "title": "file1.png", "mediaType": "image/png", "downloadLink": "/download/1"}
+				],
+				"_links": {"next": "/wiki/api/v2/pages/123/attachments?cursor=abc"}
+			}`))
+		} else {
+			w.Write([]byte(`{
+				"results": [
+					{"id": "att2", "title": "file2.png", "mediaType": "image/png", "downloadLink": "/download/2"}
+				]
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	attachments, err := c.GetAttachments(context.Background(), "123")
+	if err != nil {
+		t.Fatalf("GetAttachments() error: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Errorf("expected 2 API calls for pagination, got %d", callCount)
+	}
+	if len(attachments) != 2 {
+		t.Fatalf("got %d attachments, want 2", len(attachments))
+	}
+	if attachments[0].Title != "file1.png" {
+		t.Errorf("attachments[0].Title = %s, want file1.png", attachments[0].Title)
+	}
+	if attachments[1].Title != "file2.png" {
+		t.Errorf("attachments[1].Title = %s, want file2.png", attachments[1].Title)
+	}
+}
+
 func TestClient_DownloadAttachment(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/wiki/download/attachments/123/diagram.png" {
