@@ -17,11 +17,25 @@ type Options struct {
 	Clean   bool
 	DryRun  bool
 	Verbose bool
+	Logger  Logger
 }
+
+type Logger interface {
+	Printf(format string, args ...interface{})
+}
+
+type noopLogger struct{}
+
+func (noopLogger) Printf(string, ...interface{}) {}
 
 type Syncer struct {
 	client confluence.Client
 	fs     filesystem.FileSystem
+}
+
+type stats struct {
+	pages       int
+	attachments int
 }
 
 func New(client confluence.Client, fs filesystem.FileSystem) *Syncer {
@@ -32,14 +46,26 @@ func New(client confluence.Client, fs filesystem.FileSystem) *Syncer {
 }
 
 func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Options) error {
+	log := opts.Logger
+	if log == nil {
+		log = noopLogger{}
+	}
+
 	// Get space
 	space, err := s.client.GetSpace(ctx, spaceKey)
 	if err != nil {
 		return fmt.Errorf("getting space: %w", err)
 	}
 
+	if opts.Verbose {
+		log.Printf("Found space: %s (%s)", space.Name, space.Key)
+	}
+
 	// Clean output directory if requested
 	if opts.Clean && !opts.DryRun {
+		if opts.Verbose {
+			log.Printf("Cleaning output directory: %s", outputDir)
+		}
 		if err := s.fs.RemoveAll(outputDir); err != nil {
 			return fmt.Errorf("cleaning output directory: %w", err)
 		}
@@ -51,20 +77,29 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 		return fmt.Errorf("getting pages: %w", err)
 	}
 
+	if opts.Verbose {
+		log.Printf("Found %d pages", len(pages))
+	}
+
 	// Build tree
 	tree := BuildTree(pages)
 
 	// Sync each root node
+	st := &stats{}
 	for _, root := range tree {
-		if err := s.syncNode(ctx, root, outputDir, opts, true); err != nil {
+		if err := s.syncNode(ctx, root, outputDir, opts, true, log, st); err != nil {
 			return err
 		}
+	}
+
+	if opts.Verbose {
+		log.Printf("Synced %d pages, %d attachments", st.pages, st.attachments)
 	}
 
 	return nil
 }
 
-func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string, opts Options, isRoot bool) error {
+func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string, opts Options, isRoot bool, log Logger, st *stats) error {
 	// Get page content
 	content, err := s.client.GetPageContent(ctx, node.Page.ID)
 	if err != nil {
@@ -100,6 +135,10 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 		mdPath = filepath.Join(parentDir, filename+".md")
 	}
 
+	if opts.Verbose {
+		log.Printf("  %s -> %s", node.Page.Title, mdPath)
+	}
+
 	// Convert content to Markdown
 	attachmentPath := ""
 	if hasAttachments {
@@ -118,6 +157,7 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 			return fmt.Errorf("writing %s: %w", mdPath, err)
 		}
 	}
+	st.pages++
 
 	// Download attachments
 	if hasAttachments && !opts.DryRun {
@@ -127,16 +167,20 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 		}
 
 		for _, att := range attachments {
+			if opts.Verbose {
+				log.Printf("    attachment: %s", att.Title)
+			}
 			if err := s.downloadAttachment(ctx, att, attDir); err != nil {
 				return fmt.Errorf("downloading attachment %s: %w", att.Title, err)
 			}
+			st.attachments++
 		}
 	}
 
 	// Recursively sync children
 	usedNames := make(map[string]bool)
 	for _, child := range node.Children {
-		if err := s.syncNodeWithUsedNames(ctx, child, pageDir, opts, usedNames); err != nil {
+		if err := s.syncNodeWithUsedNames(ctx, child, pageDir, opts, usedNames, log, st); err != nil {
 			return err
 		}
 	}
@@ -144,7 +188,7 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 	return nil
 }
 
-func (s *Syncer) syncNodeWithUsedNames(ctx context.Context, node *PageNode, parentDir string, opts Options, usedNames map[string]bool) error {
+func (s *Syncer) syncNodeWithUsedNames(ctx context.Context, node *PageNode, parentDir string, opts Options, usedNames map[string]bool, log Logger, st *stats) error {
 	// Get page content
 	content, err := s.client.GetPageContent(ctx, node.Page.ID)
 	if err != nil {
@@ -178,6 +222,10 @@ func (s *Syncer) syncNodeWithUsedNames(ctx context.Context, node *PageNode, pare
 		mdPath = filepath.Join(parentDir, filename+".md")
 	}
 
+	if opts.Verbose {
+		log.Printf("  %s -> %s", node.Page.Title, mdPath)
+	}
+
 	// Convert content to Markdown
 	attachmentPath := ""
 	if hasAttachments {
@@ -196,6 +244,7 @@ func (s *Syncer) syncNodeWithUsedNames(ctx context.Context, node *PageNode, pare
 			return fmt.Errorf("writing %s: %w", mdPath, err)
 		}
 	}
+	st.pages++
 
 	// Download attachments
 	if hasAttachments && !opts.DryRun {
@@ -205,16 +254,20 @@ func (s *Syncer) syncNodeWithUsedNames(ctx context.Context, node *PageNode, pare
 		}
 
 		for _, att := range attachments {
+			if opts.Verbose {
+				log.Printf("    attachment: %s", att.Title)
+			}
 			if err := s.downloadAttachment(ctx, att, attDir); err != nil {
 				return fmt.Errorf("downloading attachment %s: %w", att.Title, err)
 			}
+			st.attachments++
 		}
 	}
 
 	// Recursively sync children
 	childUsedNames := make(map[string]bool)
 	for _, child := range node.Children {
-		if err := s.syncNodeWithUsedNames(ctx, child, pageDir, opts, childUsedNames); err != nil {
+		if err := s.syncNodeWithUsedNames(ctx, child, pageDir, opts, childUsedNames, log, st); err != nil {
 			return err
 		}
 	}

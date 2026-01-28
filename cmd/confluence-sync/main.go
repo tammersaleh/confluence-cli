@@ -15,12 +15,18 @@ import (
 )
 
 const (
-	ExitSuccess       = 0
-	ExitConfigError   = 1
-	ExitAuthError     = 2
-	ExitAPIError      = 3
-	ExitFilesysError  = 4
+	ExitSuccess      = 0
+	ExitConfigError  = 1
+	ExitAuthError    = 2
+	ExitAPIError     = 3
+	ExitFilesysError = 4
 )
+
+type stdoutLogger struct{}
+
+func (stdoutLogger) Printf(format string, args ...interface{}) {
+	fmt.Printf(format+"\n", args...)
+}
 
 var (
 	outputDir string
@@ -115,6 +121,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 		Clean:   clean,
 		DryRun:  dryRun,
 		Verbose: verbose,
+		Logger:  stdoutLogger{},
 	}
 
 	if err := syncer.Sync(ctx, spaceKey, outputDir, opts); err != nil {

@@ -6,40 +6,40 @@ import (
 
 func TestParseSpaceURL(t *testing.T) {
 	tests := []struct {
-		name        string
-		url         string
-		wantBaseURL string
+		name         string
+		url          string
+		wantBaseURL  string
 		wantSpaceKey string
-		wantErr     bool
+		wantErr      bool
 	}{
 		{
-			name:        "basic space URL",
-			url:         "https://acme.atlassian.net/wiki/spaces/ENG",
-			wantBaseURL: "https://acme.atlassian.net",
+			name:         "basic space URL",
+			url:          "https://acme.atlassian.net/wiki/spaces/ENG",
+			wantBaseURL:  "https://acme.atlassian.net",
 			wantSpaceKey: "ENG",
 		},
 		{
-			name:        "space URL with overview",
-			url:         "https://acme.atlassian.net/wiki/spaces/ENG/overview",
-			wantBaseURL: "https://acme.atlassian.net",
+			name:         "space URL with overview",
+			url:          "https://acme.atlassian.net/wiki/spaces/ENG/overview",
+			wantBaseURL:  "https://acme.atlassian.net",
 			wantSpaceKey: "ENG",
 		},
 		{
-			name:        "space URL with pages path",
-			url:         "https://acme.atlassian.net/wiki/spaces/ENG/pages/123456/Some+Page",
-			wantBaseURL: "https://acme.atlassian.net",
+			name:         "space URL with pages path",
+			url:          "https://acme.atlassian.net/wiki/spaces/ENG/pages/123456/Some+Page",
+			wantBaseURL:  "https://acme.atlassian.net",
 			wantSpaceKey: "ENG",
 		},
 		{
-			name:        "lowercase space key",
-			url:         "https://company.atlassian.net/wiki/spaces/docs",
-			wantBaseURL: "https://company.atlassian.net",
+			name:         "lowercase space key",
+			url:          "https://company.atlassian.net/wiki/spaces/docs",
+			wantBaseURL:  "https://company.atlassian.net",
 			wantSpaceKey: "docs",
 		},
 		{
-			name:        "space key with numbers",
-			url:         "https://corp.atlassian.net/wiki/spaces/TEAM123/overview",
-			wantBaseURL: "https://corp.atlassian.net",
+			name:         "space key with numbers",
+			url:          "https://corp.atlassian.net/wiki/spaces/TEAM123/overview",
+			wantBaseURL:  "https://corp.atlassian.net",
 			wantSpaceKey: "TEAM123",
 		},
 		{
