@@ -36,3 +36,5 @@ sa/
 # Editor/IDE
 # .idea/
 # .vscode/
+sa-space
+sync-sa-space.sh
