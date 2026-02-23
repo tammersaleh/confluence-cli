@@ -358,3 +358,232 @@ func TestSync_Frontmatter(t *testing.T) {
 		t.Errorf("expected body content after frontmatter, got:\n%s", content)
 	}
 }
+
+func TestSync_MultipleRoots(t *testing.T) {
+	// When a space has multiple root pages, only the first (by ID) becomes index.md.
+	// Subsequent roots get unique filenames based on their titles.
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Home", ParentID: ""},
+			{ID: "2", Title: "About", ParentID: ""},
+			{ID: "3", Title: "Contact", ParentID: ""},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Home", Body: "<p>Home content</p>", Version: 1},
+			"2": {ID: "2", Title: "About", Body: "<p>About content</p>", Version: 1},
+			"3": {ID: "3", Title: "Contact", Body: "<p>Contact content</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+
+	// First root (ID "1") becomes index.md
+	indexContent, ok := files["/output/index.md"]
+	if !ok {
+		t.Fatal("expected /output/index.md to exist")
+	}
+	if !bytes.Contains(indexContent, []byte("Home content")) {
+		t.Errorf("index.md should contain Home content, got: %s", indexContent)
+	}
+
+	// Second root gets its own file
+	if _, ok := files["/output/about.md"]; !ok {
+		t.Error("expected /output/about.md to exist")
+	}
+
+	// Third root gets its own file
+	if _, ok := files["/output/contact.md"]; !ok {
+		t.Error("expected /output/contact.md to exist")
+	}
+}
+
+func TestSync_MultipleRoots_NoCollisionWithFirstRootChildren(t *testing.T) {
+	// First root's children and subsequent roots share the same directory.
+	// They must not collide even if they have the same sanitized title.
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Home", ParentID: ""},
+			{ID: "2", Title: "Docs", ParentID: "1"},  // Child of first root
+			{ID: "3", Title: "Docs!", ParentID: ""},  // Second root with same sanitized name
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Home", Body: "<p>Home</p>", Version: 1},
+			"2": {ID: "2", Title: "Docs", Body: "<p>Child docs</p>", Version: 1},
+			"3": {ID: "3", Title: "Docs!", Body: "<p>Root docs</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+
+	// Should have 3 distinct files
+	if len(files) != 3 {
+		t.Errorf("expected 3 files, got %d: %v", len(files), keysOf(files))
+	}
+
+	// First root is index.md
+	if _, ok := files["/output/index.md"]; !ok {
+		t.Error("expected /output/index.md")
+	}
+
+	// Child "Docs" gets docs.md
+	if _, ok := files["/output/docs.md"]; !ok {
+		t.Error("expected /output/docs.md")
+	}
+
+	// Root "Docs!" must get a different name (docs-2.md) to avoid collision
+	if _, ok := files["/output/docs-2.md"]; !ok {
+		t.Error("expected /output/docs-2.md for second 'Docs' page")
+	}
+}
+
+func TestSync_VersionSkip(t *testing.T) {
+	// When a page's version matches the local file, it should be skipped.
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Page", ParentID: ""},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Page", Body: "<p>Content</p>", Version: 5},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	// Pre-populate with matching version
+	fs.WriteFile("/output/index.md", []byte("---\nversion: 5\n---\nOld content"), 0644)
+
+	syncer := New(client, fs)
+
+	var logged []string
+	logger := &testLogger{log: func(s string) { logged = append(logged, s) }}
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Logger: logger})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	// Should not have logged any URLs (page was skipped)
+	if len(logged) != 0 {
+		t.Errorf("expected no pages synced, got: %v", logged)
+	}
+
+	// File content should be unchanged
+	content := string(fs.Files()["/output/index.md"])
+	if !bytes.Contains([]byte(content), []byte("Old content")) {
+		t.Errorf("file should not have been overwritten, got: %s", content)
+	}
+}
+
+func TestSync_VersionSkip_ChildrenStillProcessed(t *testing.T) {
+	// When a parent is skipped due to version match, its children should still sync.
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Parent", ParentID: ""},
+			{ID: "2", Title: "Child", ParentID: "1"},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Parent", Body: "<p>Parent</p>", Version: 5},
+			"2": {ID: "2", Title: "Child", Body: "<p>Child content</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	// Parent has matching version, child doesn't exist
+	fs.WriteFile("/output/index.md", []byte("---\nversion: 5\n---\nParent"), 0644)
+
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+
+	// Child should have been synced even though parent was skipped
+	if _, ok := files["/output/child.md"]; !ok {
+		t.Error("expected child.md to be created even when parent was skipped")
+	}
+}
+
+func TestSync_MultipleRoots_DeterministicPaths(t *testing.T) {
+	// Running sync multiple times should produce identical file paths.
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "3", Title: "Zebra", ParentID: ""},
+			{ID: "1", Title: "Apple", ParentID: ""},
+			{ID: "2", Title: "Banana", ParentID: ""},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Apple", Body: "<p>A</p>", Version: 1},
+			"2": {ID: "2", Title: "Banana", Body: "<p>B</p>", Version: 1},
+			"3": {ID: "3", Title: "Zebra", Body: "<p>Z</p>", Version: 1},
+		},
+	}
+
+	// Run sync 10 times and verify paths are always the same
+	for i := 0; i < 10; i++ {
+		fs := filesystem.NewMemory()
+		syncer := New(client, fs)
+
+		err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+		if err != nil {
+			t.Fatalf("iteration %d: Sync error: %v", i, err)
+		}
+
+		files := fs.Files()
+
+		// ID "1" (Apple) should always be index.md since it has lowest ID
+		if content, ok := files["/output/index.md"]; !ok {
+			t.Errorf("iteration %d: expected /output/index.md", i)
+		} else if !bytes.Contains(content, []byte("Apple")) {
+			t.Errorf("iteration %d: index.md should be Apple (lowest ID), got different content", i)
+		}
+
+		// ID "2" (Banana) should always be banana.md
+		if _, ok := files["/output/banana.md"]; !ok {
+			t.Errorf("iteration %d: expected /output/banana.md", i)
+		}
+
+		// ID "3" (Zebra) should always be zebra.md
+		if _, ok := files["/output/zebra.md"]; !ok {
+			t.Errorf("iteration %d: expected /output/zebra.md", i)
+		}
+	}
+}
+
+type testLogger struct {
+	log func(string)
+}
+
+func (l *testLogger) Printf(format string, args ...interface{}) {
+	l.log(format)
+}
+
+func keysOf(m map[string][]byte) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}

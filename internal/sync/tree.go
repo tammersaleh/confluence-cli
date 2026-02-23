@@ -1,6 +1,10 @@
 package sync
 
-import "github.com/tammersaleh/confluence-sync/internal/confluence"
+import (
+	"slices"
+
+	"github.com/tammersaleh/confluence-sync/internal/confluence"
+)
 
 type PageNode struct {
 	Page     confluence.Page
@@ -33,5 +37,23 @@ func BuildTree(pages []confluence.Page) []*PageNode {
 		}
 	}
 
+	// Sort for deterministic ordering (map iteration order is random)
+	sortNodes(roots)
+
 	return roots
+}
+
+func sortNodes(nodes []*PageNode) {
+	slices.SortFunc(nodes, func(a, b *PageNode) int {
+		if a.Page.ID < b.Page.ID {
+			return -1
+		}
+		if a.Page.ID > b.Page.ID {
+			return 1
+		}
+		return 0
+	})
+	for _, n := range nodes {
+		sortNodes(n.Children)
+	}
 }

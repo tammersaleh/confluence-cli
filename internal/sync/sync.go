@@ -62,8 +62,11 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 
 	tree := BuildTree(pages)
 
-	for _, root := range tree {
-		if err := s.syncNode(ctx, root, outputDir, opts, log, nil); err != nil {
+	// All top-level items share usedNames to avoid filename collisions.
+	// First root becomes index.md, its children and subsequent roots get unique names.
+	topLevelUsedNames := make(map[string]bool)
+	for i, root := range tree {
+		if err := s.syncNode(ctx, root, outputDir, opts, log, topLevelUsedNames, i == 0); err != nil {
 			return err
 		}
 	}
@@ -71,7 +74,7 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 	return nil
 }
 
-func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string, opts Options, log Logger, usedNames map[string]bool) error {
+func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string, opts Options, log Logger, usedNames map[string]bool, isRoot bool) error {
 	content, err := s.client.GetPageContent(ctx, node.Page.ID)
 	if err != nil {
 		return fmt.Errorf("getting content for %s: %w", node.Page.Title, err)
@@ -84,7 +87,6 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 
 	hasAttachments := len(attachments) > 0
 	hasChildren := node.HasChildren()
-	isRoot := usedNames == nil
 
 	var pageDir, mdPath string
 
@@ -107,9 +109,14 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 	if existing, err := s.fs.ReadFile(mdPath); err == nil {
 		if localVersion, ok := extractVersion(existing); ok && localVersion == content.Version {
 			// Version matches, skip this page but still process children
-			childUsedNames := make(map[string]bool)
+			// If this is the root page, children share usedNames with sibling roots.
+			// Otherwise, children get their own namespace.
+			childUsedNames := usedNames
+			if !isRoot {
+				childUsedNames = make(map[string]bool)
+			}
 			for _, child := range node.Children {
-				if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames); err != nil {
+				if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames, false); err != nil {
 					return err
 				}
 			}
@@ -153,9 +160,14 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 		}
 	}
 
-	childUsedNames := make(map[string]bool)
+	// If this is the root page, children share usedNames with sibling roots.
+	// Otherwise, children get their own namespace.
+	childUsedNames := usedNames
+	if !isRoot {
+		childUsedNames = make(map[string]bool)
+	}
 	for _, child := range node.Children {
-		if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames); err != nil {
+		if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames, false); err != nil {
 			return err
 		}
 	}
