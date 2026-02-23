@@ -155,7 +155,7 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 
 		for _, att := range attachments {
 			if err := s.downloadAttachment(ctx, att, attDir); err != nil {
-				return fmt.Errorf("page %s: attachment %s: %w", content.WebURL, att.Title, err)
+				log.Printf("warning: skipping attachment %s: %v", att.Title, err)
 			}
 		}
 	}
