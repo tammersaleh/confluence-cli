@@ -383,6 +383,222 @@ func TestClient_DownloadAttachment(t *testing.T) {
 	}
 }
 
+func TestClient_GetContentParent_Database(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/databases/db1" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Write([]byte(`{
+			"id": "db1",
+			"title": "Customers",
+			"parentId": "page1",
+			"parentType": "page"
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	page, err := c.GetContentParent(context.Background(), "db1", "database")
+	if err != nil {
+		t.Fatalf("GetContentParent() error: %v", err)
+	}
+	if page.ID != "db1" {
+		t.Errorf("ID = %s, want db1", page.ID)
+	}
+	if page.Title != "Customers" {
+		t.Errorf("Title = %s, want Customers", page.Title)
+	}
+	if page.ParentID != "page1" {
+		t.Errorf("ParentID = %s, want page1", page.ParentID)
+	}
+	if page.ParentType != "page" {
+		t.Errorf("ParentType = %s, want page", page.ParentType)
+	}
+	if page.Type != "database" {
+		t.Errorf("Type = %s, want database", page.Type)
+	}
+}
+
+func TestClient_GetContentParent_Folder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/folders/f1" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Write([]byte(`{
+			"id": "f1",
+			"title": "Archive",
+			"parentId": "",
+			"parentType": ""
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	page, err := c.GetContentParent(context.Background(), "f1", "folder")
+	if err != nil {
+		t.Fatalf("GetContentParent() error: %v", err)
+	}
+	if page.ID != "f1" {
+		t.Errorf("ID = %s, want f1", page.ID)
+	}
+	if page.Title != "Archive" {
+		t.Errorf("Title = %s, want Archive", page.Title)
+	}
+	if page.Type != "folder" {
+		t.Errorf("Type = %s, want folder", page.Type)
+	}
+}
+
+func TestClient_GetPages_ResolvesNonPageParents(t *testing.T) {
+	// Page "3" has parentType "database", pointing to database "db1".
+	// Database "db1" has parentType "page", pointing to page "1".
+	// GetPages should resolve db1 and include it in the returned pages.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/wiki/api/v2/spaces/12345/pages":
+			w.Write([]byte(`{
+				"results": [
+					{"id": "1", "title": "Root"},
+					{"id": "2", "title": "Normal Child"},
+					{"id": "3", "title": "Jane Street"}
+				]
+			}`))
+		case "/wiki/api/v2/pages/1":
+			w.Write([]byte(`{"id": "1", "parentId": "", "parentType": ""}`))
+		case "/wiki/api/v2/pages/2":
+			w.Write([]byte(`{"id": "2", "parentId": "1", "parentType": "page"}`))
+		case "/wiki/api/v2/pages/3":
+			w.Write([]byte(`{"id": "3", "parentId": "db1", "parentType": "database"}`))
+		case "/wiki/api/v2/databases/db1":
+			w.Write([]byte(`{
+				"id": "db1",
+				"title": "Customers",
+				"parentId": "1",
+				"parentType": "page"
+			}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	pages, err := c.GetPages(context.Background(), "12345")
+	if err != nil {
+		t.Fatalf("GetPages() error: %v", err)
+	}
+
+	// Should have 4 items: 3 pages + 1 synthetic database node
+	if len(pages) != 4 {
+		t.Fatalf("got %d pages, want 4", len(pages))
+	}
+
+	// Find the database node
+	var dbNode *Page
+	for i := range pages {
+		if pages[i].ID == "db1" {
+			dbNode = &pages[i]
+			break
+		}
+	}
+	if dbNode == nil {
+		t.Fatal("expected database node db1 in pages")
+	}
+	if dbNode.Title != "Customers" {
+		t.Errorf("dbNode.Title = %s, want Customers", dbNode.Title)
+	}
+	if dbNode.Type != "database" {
+		t.Errorf("dbNode.Type = %s, want database", dbNode.Type)
+	}
+	if dbNode.ParentID != "1" {
+		t.Errorf("dbNode.ParentID = %s, want 1", dbNode.ParentID)
+	}
+
+	// Jane Street should have parentID=db1 and parentType=database
+	var janeStreet *Page
+	for i := range pages {
+		if pages[i].ID == "3" {
+			janeStreet = &pages[i]
+			break
+		}
+	}
+	if janeStreet == nil {
+		t.Fatal("expected Jane Street page in pages")
+	}
+	if janeStreet.ParentID != "db1" {
+		t.Errorf("janeStreet.ParentID = %s, want db1", janeStreet.ParentID)
+	}
+	if janeStreet.ParentType != "database" {
+		t.Errorf("janeStreet.ParentType = %s, want database", janeStreet.ParentType)
+	}
+}
+
+func TestClient_GetPages_ResolvesChainedNonPageParents(t *testing.T) {
+	// Page "2" is under database "db1", which is under folder "f1", which is under page "1".
+	// GetPages should resolve both db1 and f1.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/wiki/api/v2/spaces/12345/pages":
+			w.Write([]byte(`{
+				"results": [
+					{"id": "1", "title": "Root"},
+					{"id": "2", "title": "Deep Page"}
+				]
+			}`))
+		case "/wiki/api/v2/pages/1":
+			w.Write([]byte(`{"id": "1", "parentId": "", "parentType": ""}`))
+		case "/wiki/api/v2/pages/2":
+			w.Write([]byte(`{"id": "2", "parentId": "db1", "parentType": "database"}`))
+		case "/wiki/api/v2/databases/db1":
+			w.Write([]byte(`{
+				"id": "db1",
+				"title": "Customers",
+				"parentId": "f1",
+				"parentType": "folder"
+			}`))
+		case "/wiki/api/v2/folders/f1":
+			w.Write([]byte(`{
+				"id": "f1",
+				"title": "Archive",
+				"parentId": "1",
+				"parentType": "page"
+			}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	pages, err := c.GetPages(context.Background(), "12345")
+	if err != nil {
+		t.Fatalf("GetPages() error: %v", err)
+	}
+
+	// Should have 4: 2 pages + database + folder
+	if len(pages) != 4 {
+		t.Fatalf("got %d pages, want 4", len(pages))
+	}
+
+	// Verify both synthetic nodes exist
+	found := map[string]bool{}
+	for _, p := range pages {
+		found[p.ID] = true
+	}
+	if !found["db1"] {
+		t.Error("expected db1 in pages")
+	}
+	if !found["f1"] {
+		t.Error("expected f1 in pages")
+	}
+}
+
 func TestClient_AuthHeader(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

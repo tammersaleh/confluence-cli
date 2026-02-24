@@ -49,6 +49,10 @@ func (m *mockClient) DownloadAttachment(ctx context.Context, att confluence.Atta
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
+func (m *mockClient) GetContentParent(ctx context.Context, id string, contentType string) (*confluence.Page, error) {
+	return nil, nil
+}
+
 func TestSync_SingleLeafPage(t *testing.T) {
 	client := &mockClient{
 		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
@@ -568,6 +572,93 @@ func TestSync_MultipleRoots_DeterministicPaths(t *testing.T) {
 		// ID "3" (Zebra) should always be zebra.md
 		if _, ok := files["/output/zebra.md"]; !ok {
 			t.Errorf("iteration %d: expected /output/zebra.md", i)
+		}
+	}
+}
+
+func TestSync_DatabaseParentCreatesDirectory(t *testing.T) {
+	// A page under a database parent should end up in a subdirectory named
+	// after the database. The database itself should not produce a markdown file.
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Root", ParentID: "", Type: "page"},
+			{ID: "db1", Title: "Customers", ParentID: "1", Type: "database", ParentType: "page"},
+			{ID: "2", Title: "Jane Street", ParentID: "db1", Type: "page", ParentType: "database"},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Root", Body: "<p>Root</p>", Version: 1},
+			"2": {ID: "2", Title: "Jane Street", Body: "<p>Jane Street content</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+
+	// Root becomes index.md
+	if _, ok := files["/output/index.md"]; !ok {
+		t.Error("expected /output/index.md")
+	}
+
+	// Jane Street should be under customers/ directory
+	if _, ok := files["/output/customers/jane-street.md"]; !ok {
+		t.Errorf("expected /output/customers/jane-street.md, got files: %v", keysOf(files))
+	}
+
+	// Database node should NOT produce any markdown file
+	for path := range files {
+		if path == "/output/customers/index.md" || path == "/output/customers.md" {
+			t.Errorf("database node should not produce markdown, but found: %s", path)
+		}
+	}
+}
+
+func TestSync_FolderParentCreatesDirectory(t *testing.T) {
+	// A database under a folder, with a page under the database.
+	// Should create: folder-dir/database-dir/page.md
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Root", ParentID: "", Type: "page"},
+			{ID: "f1", Title: "Notion Archive", ParentID: "1", Type: "folder", ParentType: "page"},
+			{ID: "db1", Title: "Customers", ParentID: "f1", Type: "database", ParentType: "folder"},
+			{ID: "2", Title: "Jane Street", ParentID: "db1", Type: "page", ParentType: "database"},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Root", Body: "<p>Root</p>", Version: 1},
+			"2": {ID: "2", Title: "Jane Street", Body: "<p>JS content</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+
+	// Jane Street should be nested under notion-archive/customers/
+	if _, ok := files["/output/notion-archive/customers/jane-street.md"]; !ok {
+		t.Errorf("expected /output/notion-archive/customers/jane-street.md, got files: %v", keysOf(files))
+	}
+
+	// Neither folder nor database should produce markdown
+	for path := range files {
+		if path == "/output/notion-archive/index.md" ||
+			path == "/output/notion-archive/customers/index.md" ||
+			path == "/output/notion-archive.md" ||
+			path == "/output/customers.md" {
+			t.Errorf("container node should not produce markdown, but found: %s", path)
 		}
 	}
 }

@@ -20,9 +20,11 @@ type Space struct {
 }
 
 type Page struct {
-	ID       string
-	Title    string
-	ParentID string
+	ID         string
+	Title      string
+	ParentID   string
+	ParentType string // "page", "database", "folder", or "" (unknown/root)
+	Type       string // "page", "database", "folder"
 }
 
 type PageContent struct {
@@ -50,4 +52,5 @@ type Client interface {
 	GetPageContent(ctx context.Context, pageID string) (*PageContent, error)
 	GetAttachments(ctx context.Context, pageID string) ([]Attachment, error)
 	DownloadAttachment(ctx context.Context, attachment Attachment) (io.ReadCloser, error)
+	GetContentParent(ctx context.Context, id string, contentType string) (*Page, error)
 }

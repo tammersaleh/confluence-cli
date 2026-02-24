@@ -162,8 +162,10 @@ type pagesResponse struct {
 }
 
 type pageResponse struct {
-	ID       string `json:"id"`
-	ParentID string `json:"parentId"`
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	ParentID   string `json:"parentId"`
+	ParentType string `json:"parentType"`
 }
 
 func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
@@ -208,29 +210,67 @@ func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
 	// The /spaces/{id}/pages endpoint doesn't reliably return parentId,
 	// so we fetch each page individually to get parent info.
 	for i := range allPages {
-		parentID, err := c.getPageParentID(ctx, allPages[i].ID)
+		parentID, parentType, err := c.getPageParent(ctx, allPages[i].ID)
 		if err != nil {
 			return nil, fmt.Errorf("getting parent for page %s: %w", allPages[i].ID, err)
 		}
 		allPages[i].ParentID = parentID
+		allPages[i].ParentType = parentType
+		allPages[i].Type = "page"
+	}
+
+	// Resolve non-page parents (databases, folders) by fetching them and
+	// adding synthetic nodes to the page list. Repeat until all parents
+	// resolve to known nodes or root.
+	known := make(map[string]bool, len(allPages))
+	for _, p := range allPages {
+		known[p.ID] = true
+	}
+
+	for {
+		var toResolve []Page
+		for _, p := range allPages {
+			if p.ParentID != "" && !known[p.ParentID] && (p.ParentType == "database" || p.ParentType == "folder") {
+				toResolve = append(toResolve, p)
+			}
+		}
+		if len(toResolve) == 0 {
+			break
+		}
+
+		// Deduplicate by parent ID
+		seen := make(map[string]bool)
+		for _, p := range toResolve {
+			if seen[p.ParentID] {
+				continue
+			}
+			seen[p.ParentID] = true
+
+			parent, err := c.GetContentParent(ctx, p.ParentID, p.ParentType)
+			if err != nil {
+				return nil, fmt.Errorf("resolving %s parent %s: %w", p.ParentType, p.ParentID, err)
+			}
+			allPages = append(allPages, *parent)
+			known[parent.ID] = true
+		}
 	}
 
 	return allPages, nil
 }
 
-func (c *client) getPageParentID(ctx context.Context, pageID string) (string, error) {
+func (c *client) getPageParent(ctx context.Context, pageID string) (parentID, parentType string, err error) {
 	resp, err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/wiki/api/v2/pages/%s", pageID), nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 
 	var result pageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decoding response: %w", err)
+		return "", "", fmt.Errorf("decoding response: %w", err)
 	}
 
-	return result.ParentID, nil
+	return result.ParentID, result.ParentType, nil
 }
 
 type pageContentResponse struct {
@@ -341,6 +381,37 @@ func (c *client) GetAttachments(ctx context.Context, pageID string) ([]Attachmen
 	}
 
 	return allAttachments, nil
+}
+
+func (c *client) GetContentParent(ctx context.Context, id string, contentType string) (*Page, error) {
+	var apiPath string
+	switch contentType {
+	case "database":
+		apiPath = fmt.Sprintf("/wiki/api/v2/databases/%s", id)
+	case "folder":
+		apiPath = fmt.Sprintf("/wiki/api/v2/folders/%s", id)
+	default:
+		return nil, fmt.Errorf("unsupported content type: %s", contentType)
+	}
+
+	resp, err := c.doRequest(ctx, http.MethodGet, apiPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result pageResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return &Page{
+		ID:         result.ID,
+		Title:      result.Title,
+		ParentID:   result.ParentID,
+		ParentType: result.ParentType,
+		Type:       contentType,
+	}, nil
 }
 
 func (c *client) DownloadAttachment(ctx context.Context, attachment Attachment) (io.ReadCloser, error) {

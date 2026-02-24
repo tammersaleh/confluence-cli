@@ -74,7 +74,17 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 	return nil
 }
 
+func isContainer(page confluence.Page) bool {
+	return page.Type == "database" || page.Type == "folder"
+}
+
 func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string, opts Options, log Logger, usedNames map[string]bool, isRoot bool) error {
+	// Database and folder nodes are directory-only containers.
+	// They create subdirectories but produce no markdown files.
+	if isContainer(node.Page) {
+		return s.syncContainerNode(ctx, node, parentDir, opts, log, usedNames)
+	}
+
 	content, err := s.client.GetPageContent(ctx, node.Page.ID)
 	if err != nil {
 		return fmt.Errorf("getting content for %s: %w", node.Page.Title, err)
@@ -168,6 +178,27 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 	}
 	for _, child := range node.Children {
 		if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Syncer) syncContainerNode(ctx context.Context, node *PageNode, parentDir string, opts Options, log Logger, usedNames map[string]bool) error {
+	dirName := sanitize.FilenameWithCollision(node.Page.Title, usedNames)
+	usedNames[dirName] = true
+	containerDir := filepath.Join(parentDir, dirName)
+
+	if !opts.DryRun {
+		if err := s.fs.MkdirAll(containerDir, 0755); err != nil {
+			return fmt.Errorf("creating container directory: %w", err)
+		}
+	}
+
+	childUsedNames := make(map[string]bool)
+	for _, child := range node.Children {
+		if err := s.syncNode(ctx, child, containerDir, opts, log, childUsedNames, false); err != nil {
 			return err
 		}
 	}

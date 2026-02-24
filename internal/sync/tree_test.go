@@ -92,6 +92,54 @@ func TestPageNode_HasChildren(t *testing.T) {
 	}
 }
 
+func TestBuildTree_NonPageParentsIntegrate(t *testing.T) {
+	// Database and folder nodes (with Type set) should integrate into the tree
+	// just like regular pages, based on their ParentID.
+	pages := []confluence.Page{
+		{ID: "1", Title: "Root", ParentID: "", Type: "page"},
+		{ID: "f1", Title: "Archive", ParentID: "1", Type: "folder", ParentType: "page"},
+		{ID: "db1", Title: "Customers", ParentID: "f1", Type: "database", ParentType: "folder"},
+		{ID: "2", Title: "Jane Street", ParentID: "db1", Type: "page", ParentType: "database"},
+	}
+
+	tree := BuildTree(pages)
+
+	if len(tree) != 1 {
+		t.Fatalf("expected 1 root, got %d", len(tree))
+	}
+
+	root := tree[0]
+	if root.Page.ID != "1" {
+		t.Errorf("root ID = %s, want 1", root.Page.ID)
+	}
+
+	// Root should have folder "f1" as child
+	if len(root.Children) != 1 {
+		t.Fatalf("root has %d children, want 1", len(root.Children))
+	}
+	folder := root.Children[0]
+	if folder.Page.ID != "f1" {
+		t.Errorf("folder ID = %s, want f1", folder.Page.ID)
+	}
+
+	// Folder should have database "db1" as child
+	if len(folder.Children) != 1 {
+		t.Fatalf("folder has %d children, want 1", len(folder.Children))
+	}
+	db := folder.Children[0]
+	if db.Page.ID != "db1" {
+		t.Errorf("database ID = %s, want db1", db.Page.ID)
+	}
+
+	// Database should have page "2" as child
+	if len(db.Children) != 1 {
+		t.Fatalf("database has %d children, want 1", len(db.Children))
+	}
+	if db.Children[0].Page.ID != "2" {
+		t.Errorf("leaf ID = %s, want 2", db.Children[0].Page.ID)
+	}
+}
+
 func TestBuildTree_DeterministicOrder(t *testing.T) {
 	// BuildTree must return consistent ordering regardless of map iteration order.
 	// Run multiple times to catch non-determinism (Go randomizes map iteration).
