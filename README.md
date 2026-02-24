@@ -18,7 +18,7 @@ Arguments:
   output-dir            Output directory for synced files
 
 Flags:
-      --clean           Delete output directory before sync
+      --prune           Remove stale local files after sync
       --dry-run         Show what would be synced without writing files
   -q, --quiet           Suppress progress output
   -h, --help            Help
@@ -126,6 +126,12 @@ api-design/
 └── _attachments/
     └── openapi.yaml
 ```
+
+### Incremental Sync
+
+On subsequent runs, the `version` field in each file's frontmatter is compared against the Confluence API. Unchanged pages are skipped.
+
+With `--prune`, stale local files (pages deleted or renamed in Confluence) are removed after sync. Attachments of version-skipped pages are left alone since their attachment list wasn't re-fetched.
 
 ### Filename Sanitization
 

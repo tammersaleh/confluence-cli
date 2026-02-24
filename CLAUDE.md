@@ -17,7 +17,7 @@ internal/
     sync.go                    Orchestrates the sync: fetches pages, builds tree, walks it writing files.
     tree.go                    Converts flat page list to parent-child tree. Orphans become roots.
   filesystem/
-    fs.go                      FileSystem interface (MkdirAll, WriteFile, ReadFile, RemoveAll).
+    fs.go                      FileSystem interface (MkdirAll, WriteFile, ReadFile, RemoveAll, ReadDir).
     memory.go                  In-memory implementation for tests.
 pkg/sanitize/
   sanitize.go                  Converts page titles to filesystem-safe names. Handles collisions.
@@ -36,13 +36,14 @@ pkg/sanitize/
    - Writes Markdown files (with YAML frontmatter including a `version` field)
    - Downloads attachments to `_attachments/` directories
 7. On subsequent runs, version in frontmatter is compared to skip unchanged pages.
+8. With `--prune`, a manifest of expected paths is built during the walk. After syncing, `pruneStaleFiles` walks the output directory and removes anything not in the manifest. `_attachments/` dirs of version-skipped pages are protected (not descended into) since their attachment list wasn't re-fetched.
 
 ### Key interfaces
 
 Both are in `internal/` and injected into `Syncer`:
 
 - `confluence.Client` - API operations (GetSpace, GetPages, GetPageContent, GetAttachments, DownloadAttachment, GetContentParent)
-- `filesystem.FileSystem` - file I/O (MkdirAll, WriteFile, ReadFile, RemoveAll)
+- `filesystem.FileSystem` - file I/O (MkdirAll, WriteFile, ReadFile, RemoveAll, ReadDir)
 
 ### Non-obvious behaviors
 
@@ -52,6 +53,7 @@ Both are in `internal/` and injected into `Syncer`:
 - Filename collisions (after sanitization) get `-2`, `-3`, etc. suffixes. Collision tracking is per-namespace (shared for roots, per-parent for non-roots).
 - The converter handles Confluence-specific XHTML elements like `ac:structured-macro` (code blocks), `ac:image`, `ri:attachment`, and rewrites attachment URLs to local `_attachments/` paths.
 - The converter uses Go's `xml.Decoder` with `AutoClose` for self-closing HTML elements - not an HTML parser. Malformed HTML will behave differently than you'd expect from a browser.
+- `--prune` protects `_attachments/` dirs of version-skipped pages. Since the attachment list wasn't re-fetched, stale attachments in those dirs won't be cleaned until the page version bumps.
 
 ## Testing
 

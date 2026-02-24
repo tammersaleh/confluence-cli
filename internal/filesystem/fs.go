@@ -10,6 +10,7 @@ type FileSystem interface {
 	ReadFile(path string) ([]byte, error)
 	RemoveAll(path string) error
 	Stat(path string) (os.FileInfo, error)
+	ReadDir(path string) ([]os.DirEntry, error)
 }
 
 // OS implements FileSystem using the real filesystem.
@@ -33,4 +34,8 @@ func (OS) RemoveAll(path string) error {
 
 func (OS) Stat(path string) (os.FileInfo, error) {
 	return os.Stat(path)
+}
+
+func (OS) ReadDir(path string) ([]os.DirEntry, error) {
+	return os.ReadDir(path)
 }

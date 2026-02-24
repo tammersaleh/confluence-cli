@@ -3,8 +3,10 @@ package sync
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tammersaleh/confluence-sync/internal/confluence"
@@ -212,35 +214,265 @@ func TestSync_PageWithAttachments(t *testing.T) {
 	}
 }
 
-func TestSync_CleanOption(t *testing.T) {
+func TestSync_PruneRemovesStaleFiles(t *testing.T) {
 	client := &mockClient{
 		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
 		pages: []confluence.Page{
-			{ID: "1", Title: "New Page", ParentID: ""},
+			{ID: "1", Title: "Current Page", ParentID: ""},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Current Page", Body: "<p>Current</p>", Version: 1},
 		},
 	}
 
 	fs := filesystem.NewMemory()
-	// Pre-existing file
-	fs.WriteFile("/output/old-file.md", []byte("old content"), 0644)
+	fs.MkdirAll("/output", 0755)
+	fs.WriteFile("/output/stale-page.md", []byte("stale content"), 0644)
+	fs.MkdirAll("/output/stale-dir", 0755)
+	fs.WriteFile("/output/stale-dir/index.md", []byte("stale"), 0644)
 
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Clean: true})
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
 
 	files := fs.Files()
 
-	// Old file should be gone
-	if _, ok := files["/output/old-file.md"]; ok {
-		t.Error("expected old-file.md to be removed with --clean")
+	if _, ok := files["/output/stale-page.md"]; ok {
+		t.Error("expected stale-page.md to be pruned")
 	}
-
-	// New file should exist
+	if _, ok := files["/output/stale-dir/index.md"]; ok {
+		t.Error("expected stale-dir/index.md to be pruned")
+	}
 	if _, ok := files["/output/index.md"]; !ok {
 		t.Error("expected index.md to exist")
+	}
+}
+
+func TestSync_PrunePreservesCurrentFiles(t *testing.T) {
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Root", ParentID: ""},
+			{ID: "2", Title: "Child", ParentID: "1"},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Root", Body: "<p>Root</p>", Version: 1},
+			"2": {ID: "2", Title: "Child", Body: "<p>Child</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+	if _, ok := files["/output/index.md"]; !ok {
+		t.Error("expected index.md to exist")
+	}
+	if _, ok := files["/output/child.md"]; !ok {
+		t.Error("expected child.md to exist")
+	}
+}
+
+func TestSync_PruneWithVersionSkip(t *testing.T) {
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Root", ParentID: ""},
+			{ID: "2", Title: "Child", ParentID: "1"},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Root", Body: "<p>Root</p>", Version: 5},
+			"2": {ID: "2", Title: "Child", Body: "<p>Child</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	fs.MkdirAll("/output", 0755)
+	// Root has matching version - will be skipped
+	fs.WriteFile("/output/index.md", []byte("---\nversion: 5\n---\nOld root"), 0644)
+	// Stale sibling file
+	fs.WriteFile("/output/stale.md", []byte("stale"), 0644)
+
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+
+	// Skipped page should be untouched
+	if content, ok := files["/output/index.md"]; !ok {
+		t.Error("expected index.md to still exist")
+	} else if !bytes.Contains(content, []byte("Old root")) {
+		t.Error("skipped page content should be unchanged")
+	}
+
+	// Child should exist
+	if _, ok := files["/output/child.md"]; !ok {
+		t.Error("expected child.md to exist")
+	}
+
+	// Stale file should be gone
+	if _, ok := files["/output/stale.md"]; ok {
+		t.Error("expected stale.md to be pruned")
+	}
+}
+
+func TestSync_PruneProtectsAttachmentsOfSkippedPages(t *testing.T) {
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Page", ParentID: ""},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Page", Body: "<p>Content</p>", Version: 5},
+		},
+		attachments: map[string][]confluence.Attachment{
+			"1": {{ID: "att1", Title: "img.png", DownloadURL: "/download/img.png"}},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	fs.MkdirAll("/output", 0755)
+	fs.MkdirAll("/output/_attachments", 0755)
+	// Version matches - page will be skipped
+	fs.WriteFile("/output/index.md", []byte("---\nversion: 5\n---\nContent"), 0644)
+	// Stale attachment inside _attachments should be protected
+	fs.WriteFile("/output/_attachments/old-image.png", []byte("OLD PNG"), 0644)
+
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+
+	// _attachments/old-image.png should still exist (protected)
+	if _, ok := files["/output/_attachments/old-image.png"]; !ok {
+		t.Error("expected _attachments/old-image.png to be protected for version-skipped page")
+	}
+}
+
+func TestSync_PruneRemovesEmptyDirectories(t *testing.T) {
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Root", ParentID: ""},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Root", Body: "<p>Root</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	fs.MkdirAll("/output", 0755)
+	// Stale directory with a stale file inside
+	fs.MkdirAll("/output/old-section", 0755)
+	fs.WriteFile("/output/old-section/old-page.md", []byte("old"), 0644)
+
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+	dirs := fs.Dirs()
+
+	if _, ok := files["/output/old-section/old-page.md"]; ok {
+		t.Error("expected old-section/old-page.md to be pruned")
+	}
+
+	for _, d := range dirs {
+		if d == "/output/old-section" {
+			t.Error("expected empty old-section directory to be removed")
+		}
+	}
+}
+
+func TestSync_PruneDisabledByDefault(t *testing.T) {
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Page", ParentID: ""},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Page", Body: "<p>Content</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	fs.MkdirAll("/output", 0755)
+	fs.WriteFile("/output/stale.md", []byte("stale"), 0644)
+
+	syncer := New(client, fs)
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+	if _, ok := files["/output/stale.md"]; !ok {
+		t.Error("stale file should persist when Prune is false")
+	}
+}
+
+func TestSync_PruneDryRun(t *testing.T) {
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Page", ParentID: ""},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Page", Body: "<p>Content</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	fs.MkdirAll("/output", 0755)
+	fs.WriteFile("/output/stale.md", []byte("stale"), 0644)
+
+	syncer := New(client, fs)
+
+	var logged []string
+	logger := &testLogger{log: func(s string) { logged = append(logged, s) }}
+
+	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true, DryRun: true, Logger: logger})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	files := fs.Files()
+
+	// Stale file should still exist in dry-run
+	if _, ok := files["/output/stale.md"]; !ok {
+		t.Error("stale file should persist in dry-run mode")
+	}
+
+	// Should have logged the prune action
+	found := false
+	for _, msg := range logged {
+		if strings.Contains(msg, "stale.md") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected log message about stale.md, got: %v", logged)
 	}
 }
 
@@ -668,7 +900,7 @@ type testLogger struct {
 }
 
 func (l *testLogger) Printf(format string, args ...interface{}) {
-	l.log(format)
+	l.log(fmt.Sprintf(format, args...))
 }
 
 func keysOf(m map[string][]byte) []string {

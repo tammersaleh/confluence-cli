@@ -29,7 +29,7 @@ func (stdoutLogger) Printf(format string, args ...interface{}) {
 }
 
 var (
-	clean  bool
+	prune  bool
 	dryRun bool
 	quiet  bool
 )
@@ -58,7 +58,7 @@ Example:
 }
 
 func init() {
-	rootCmd.Flags().BoolVar(&clean, "clean", false, "Delete output directory before sync")
+	rootCmd.Flags().BoolVar(&prune, "prune", false, "Remove stale local files after sync")
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be synced without writing files")
 	rootCmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Suppress progress output")
 }
@@ -117,7 +117,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := sync.Options{
-		Clean:  clean,
+		Prune:  prune,
 		DryRun: dryRun,
 		Logger: stdoutLogger{},
 	}

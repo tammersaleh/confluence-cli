@@ -1,8 +1,10 @@
 package filesystem
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -123,6 +125,57 @@ func (m *Memory) Dirs() []string {
 	return result
 }
 
+func (m *Memory) ReadDir(path string) ([]os.DirEntry, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	path = filepath.Clean(path)
+	if !m.dirs[path] {
+		return nil, os.ErrNotExist
+	}
+
+	seen := make(map[string]bool)
+	var entries []os.DirEntry
+
+	prefix := path + string(filepath.Separator)
+
+	for f, data := range m.files {
+		if !strings.HasPrefix(f, prefix) {
+			continue
+		}
+		rest := f[len(prefix):]
+		if strings.Contains(rest, string(filepath.Separator)) {
+			continue
+		}
+		if seen[rest] {
+			continue
+		}
+		seen[rest] = true
+		entries = append(entries, &memDirEntry{name: rest, size: int64(len(data)), isDir: false})
+	}
+
+	for d := range m.dirs {
+		if !strings.HasPrefix(d, prefix) {
+			continue
+		}
+		rest := d[len(prefix):]
+		if strings.Contains(rest, string(filepath.Separator)) {
+			continue
+		}
+		if seen[rest] {
+			continue
+		}
+		seen[rest] = true
+		entries = append(entries, &memDirEntry{name: rest, isDir: true})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	return entries, nil
+}
+
 type memFileInfo struct {
 	name  string
 	size  int64
@@ -134,4 +187,22 @@ func (fi *memFileInfo) Size() int64        { return fi.size }
 func (fi *memFileInfo) Mode() os.FileMode  { return 0644 }
 func (fi *memFileInfo) ModTime() time.Time { return time.Time{} }
 func (fi *memFileInfo) IsDir() bool        { return fi.isDir }
-func (fi *memFileInfo) Sys() interface{}   { return nil }
+func (fi *memFileInfo) Sys() any           { return nil }
+
+type memDirEntry struct {
+	name  string
+	size  int64
+	isDir bool
+}
+
+func (e *memDirEntry) Name() string      { return e.name }
+func (e *memDirEntry) IsDir() bool       { return e.isDir }
+func (e *memDirEntry) Type() fs.FileMode {
+	if e.isDir {
+		return fs.ModeDir
+	}
+	return 0
+}
+func (e *memDirEntry) Info() (fs.FileInfo, error) {
+	return &memFileInfo{name: e.name, size: e.size, isDir: e.isDir}, nil
+}

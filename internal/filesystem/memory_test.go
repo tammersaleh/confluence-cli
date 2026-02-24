@@ -98,3 +98,52 @@ func TestMemory_Stat(t *testing.T) {
 		t.Errorf("expected ErrNotExist, got %v", err)
 	}
 }
+
+func TestMemory_ReadDir(t *testing.T) {
+	m := NewMemory()
+
+	m.MkdirAll("/root/subdir", 0755)
+	m.WriteFile("/root/file-a.txt", []byte("aaa"), 0644)
+	m.WriteFile("/root/file-b.txt", []byte("bb"), 0644)
+	m.WriteFile("/root/subdir/nested.txt", []byte("nested"), 0644)
+
+	entries, err := m.ReadDir("/root")
+	if err != nil {
+		t.Fatalf("ReadDir error: %v", err)
+	}
+
+	if len(entries) != 3 {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("expected 3 entries, got %d: %v", len(entries), names)
+	}
+
+	// Entries should be sorted by name
+	if entries[0].Name() != "file-a.txt" || entries[0].IsDir() {
+		t.Errorf("entry[0] = %s (dir=%v), want file-a.txt (dir=false)", entries[0].Name(), entries[0].IsDir())
+	}
+	if entries[1].Name() != "file-b.txt" || entries[1].IsDir() {
+		t.Errorf("entry[1] = %s (dir=%v), want file-b.txt (dir=false)", entries[1].Name(), entries[1].IsDir())
+	}
+	if entries[2].Name() != "subdir" || !entries[2].IsDir() {
+		t.Errorf("entry[2] = %s (dir=%v), want subdir (dir=true)", entries[2].Name(), entries[2].IsDir())
+	}
+
+	// ReadDir on nonexistent path
+	_, err = m.ReadDir("/nonexistent")
+	if err != os.ErrNotExist {
+		t.Errorf("expected ErrNotExist, got %v", err)
+	}
+
+	// ReadDir on empty dir
+	m.MkdirAll("/empty", 0755)
+	entries, err = m.ReadDir("/empty")
+	if err != nil {
+		t.Fatalf("ReadDir empty error: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries for empty dir, got %d", len(entries))
+	}
+}

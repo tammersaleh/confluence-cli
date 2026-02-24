@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -16,7 +17,7 @@ import (
 )
 
 type Options struct {
-	Clean  bool
+	Prune  bool
 	DryRun bool
 	Logger Logger
 }
@@ -28,6 +29,11 @@ type Logger interface {
 type noopLogger struct{}
 
 func (noopLogger) Printf(string, ...interface{}) {}
+
+type syncManifest struct {
+	expectedPaths map[string]bool
+	protectedDirs map[string]bool
+}
 
 type Syncer struct {
 	client confluence.Client
@@ -49,12 +55,6 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 		return fmt.Errorf("getting space: %w", err)
 	}
 
-	if opts.Clean && !opts.DryRun {
-		if err := s.fs.RemoveAll(outputDir); err != nil {
-			return fmt.Errorf("cleaning output directory: %w", err)
-		}
-	}
-
 	pages, err := s.client.GetPages(ctx, space.ID)
 	if err != nil {
 		return fmt.Errorf("getting pages: %w", err)
@@ -62,12 +62,23 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 
 	tree := BuildTree(pages)
 
+	manifest := &syncManifest{
+		expectedPaths: make(map[string]bool),
+		protectedDirs: make(map[string]bool),
+	}
+
 	// All top-level items share usedNames to avoid filename collisions.
 	// First root becomes index.md, its children and subsequent roots get unique names.
 	topLevelUsedNames := make(map[string]bool)
 	for i, root := range tree {
-		if err := s.syncNode(ctx, root, outputDir, opts, log, topLevelUsedNames, i == 0); err != nil {
+		if err := s.syncNode(ctx, root, outputDir, opts, log, topLevelUsedNames, i == 0, manifest); err != nil {
 			return err
+		}
+	}
+
+	if opts.Prune {
+		if err := s.pruneStaleFiles(outputDir, manifest, log, opts.DryRun); err != nil {
+			return fmt.Errorf("pruning stale files: %w", err)
 		}
 	}
 
@@ -78,11 +89,11 @@ func isContainer(page confluence.Page) bool {
 	return page.Type == "database" || page.Type == "folder"
 }
 
-func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string, opts Options, log Logger, usedNames map[string]bool, isRoot bool) error {
+func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string, opts Options, log Logger, usedNames map[string]bool, isRoot bool, manifest *syncManifest) error {
 	// Database and folder nodes are directory-only containers.
 	// They create subdirectories but produce no markdown files.
 	if isContainer(node.Page) {
-		return s.syncContainerNode(ctx, node, parentDir, opts, log, usedNames)
+		return s.syncContainerNode(ctx, node, parentDir, opts, log, usedNames, manifest)
 	}
 
 	content, err := s.client.GetPageContent(ctx, node.Page.ID)
@@ -108,6 +119,7 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 		usedNames[dirName] = true
 		pageDir = filepath.Join(parentDir, dirName)
 		mdPath = filepath.Join(pageDir, "index.md")
+		manifest.expectedPaths[pageDir] = true
 	} else {
 		pageDir = parentDir
 		filename := sanitize.FilenameWithCollision(node.Page.Title, usedNames)
@@ -115,18 +127,26 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 		mdPath = filepath.Join(parentDir, filename+".md")
 	}
 
+	manifest.expectedPaths[mdPath] = true
+
 	// Check if local file already has the same version
 	if existing, err := s.fs.ReadFile(mdPath); err == nil {
 		if localVersion, ok := extractVersion(existing); ok && localVersion == content.Version {
-			// Version matches, skip this page but still process children
-			// If this is the root page, children share usedNames with sibling roots.
-			// Otherwise, children get their own namespace.
+			// Version matches, skip this page but still process children.
+			// Protect _attachments/ dir if it exists on disk since we didn't
+			// re-fetch the attachment list.
+			attDir := filepath.Join(pageDir, "_attachments")
+			if _, err := s.fs.Stat(attDir); err == nil {
+				manifest.expectedPaths[attDir] = true
+				manifest.protectedDirs[attDir] = true
+			}
+
 			childUsedNames := usedNames
 			if !isRoot {
 				childUsedNames = make(map[string]bool)
 			}
 			for _, child := range node.Children {
-				if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames, false); err != nil {
+				if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames, false, manifest); err != nil {
 					return err
 				}
 			}
@@ -157,15 +177,22 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 		}
 	}
 
-	if hasAttachments && !opts.DryRun {
+	if hasAttachments {
 		attDir := filepath.Join(pageDir, "_attachments")
-		if err := s.fs.MkdirAll(attDir, 0755); err != nil {
-			return fmt.Errorf("creating attachments directory: %w", err)
+		manifest.expectedPaths[attDir] = true
+		for _, att := range attachments {
+			manifest.expectedPaths[filepath.Join(attDir, att.Title)] = true
 		}
 
-		for _, att := range attachments {
-			if err := s.downloadAttachment(ctx, att, attDir); err != nil {
-				log.Printf("warning: skipping attachment %s: %v", att.Title, err)
+		if !opts.DryRun {
+			if err := s.fs.MkdirAll(attDir, 0755); err != nil {
+				return fmt.Errorf("creating attachments directory: %w", err)
+			}
+
+			for _, att := range attachments {
+				if err := s.downloadAttachment(ctx, att, attDir); err != nil {
+					log.Printf("warning: skipping attachment %s: %v", att.Title, err)
+				}
 			}
 		}
 	}
@@ -177,7 +204,7 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 		childUsedNames = make(map[string]bool)
 	}
 	for _, child := range node.Children {
-		if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames, false); err != nil {
+		if err := s.syncNode(ctx, child, pageDir, opts, log, childUsedNames, false, manifest); err != nil {
 			return err
 		}
 	}
@@ -185,10 +212,12 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 	return nil
 }
 
-func (s *Syncer) syncContainerNode(ctx context.Context, node *PageNode, parentDir string, opts Options, log Logger, usedNames map[string]bool) error {
+func (s *Syncer) syncContainerNode(ctx context.Context, node *PageNode, parentDir string, opts Options, log Logger, usedNames map[string]bool, manifest *syncManifest) error {
 	dirName := sanitize.FilenameWithCollision(node.Page.Title, usedNames)
 	usedNames[dirName] = true
 	containerDir := filepath.Join(parentDir, dirName)
+
+	manifest.expectedPaths[containerDir] = true
 
 	if !opts.DryRun {
 		if err := s.fs.MkdirAll(containerDir, 0755); err != nil {
@@ -198,7 +227,7 @@ func (s *Syncer) syncContainerNode(ctx context.Context, node *PageNode, parentDi
 
 	childUsedNames := make(map[string]bool)
 	for _, child := range node.Children {
-		if err := s.syncNode(ctx, child, containerDir, opts, log, childUsedNames, false); err != nil {
+		if err := s.syncNode(ctx, child, containerDir, opts, log, childUsedNames, false, manifest); err != nil {
 			return err
 		}
 	}
@@ -219,6 +248,50 @@ func (s *Syncer) downloadAttachment(ctx context.Context, att confluence.Attachme
 	}
 
 	return s.fs.WriteFile(filepath.Join(dir, att.Title), data, 0644)
+}
+
+func (s *Syncer) pruneStaleFiles(dir string, manifest *syncManifest, log Logger, dryRun bool) error {
+	entries, err := s.fs.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("reading directory %s: %w", dir, err)
+	}
+
+	for _, entry := range entries {
+		fullPath := filepath.Join(dir, entry.Name())
+
+		if entry.IsDir() {
+			if manifest.protectedDirs[fullPath] {
+				continue
+			}
+			if manifest.expectedPaths[fullPath] {
+				if err := s.pruneStaleFiles(fullPath, manifest, log, dryRun); err != nil {
+					return err
+				}
+				continue
+			}
+			log.Printf("prune: %s", fullPath)
+			if !dryRun {
+				if err := s.fs.RemoveAll(fullPath); err != nil {
+					return fmt.Errorf("removing %s: %w", fullPath, err)
+				}
+			}
+			continue
+		}
+
+		if !manifest.expectedPaths[fullPath] {
+			log.Printf("prune: %s", fullPath)
+			if !dryRun {
+				if err := s.fs.RemoveAll(fullPath); err != nil {
+					return fmt.Errorf("removing %s: %w", fullPath, err)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 var versionRe = regexp.MustCompile(`(?m)^version:\s*(\d+)`)
