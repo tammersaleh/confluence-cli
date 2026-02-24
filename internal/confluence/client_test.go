@@ -243,6 +243,35 @@ func TestClient_GetPageContent(t *testing.T) {
 	}
 }
 
+func TestClient_GetPageContent_WebUIWithoutWikiPrefix(t *testing.T) {
+	// The Confluence v2 API returns _links.webui without the /wiki prefix
+	// (e.g. "/spaces/SA/pages/123/My+Page" instead of "/wiki/spaces/SA/pages/123/My+Page").
+	// The constructed URL must still include /wiki to be a valid browser URL.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{
+			"id": "123",
+			"title": "My Page",
+			"authorId": "user456",
+			"createdAt": "2024-01-15T10:30:00.000Z",
+			"body": {"storage": {"value": "<p>Hello</p>"}},
+			"version": {"number": 5, "createdAt": "2024-06-20T14:45:00.000Z", "authorId": "user789"},
+			"_links": {"webui": "/spaces/TEST/pages/123/My+Page"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	content, err := c.GetPageContent(context.Background(), "123")
+	if err != nil {
+		t.Fatalf("GetPageContent() error: %v", err)
+	}
+
+	wantURL := server.URL + "/wiki/spaces/TEST/pages/123/My+Page"
+	if content.WebURL != wantURL {
+		t.Errorf("WebURL = %s, want %s", content.WebURL, wantURL)
+	}
+}
+
 func TestClient_GetAttachments(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/wiki/api/v2/pages/123/attachments" {

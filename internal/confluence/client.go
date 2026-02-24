@@ -270,6 +270,9 @@ func (c *client) GetPageContent(ctx context.Context, pageID string) (*PageConten
 
 	webURL := result.Links.WebUI
 	if webURL != "" && !strings.HasPrefix(webURL, "http") {
+		if !strings.HasPrefix(webURL, "/wiki") {
+			webURL = "/wiki" + webURL
+		}
 		webURL = c.baseURL + webURL
 	}
 
