@@ -3,7 +3,7 @@
 #
 # Binaries for programs and plugins
 bin/
-confluence-sync
+/confluence-sync
 *.exe
 *.exe~
 *.dll
