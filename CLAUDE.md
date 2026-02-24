@@ -27,24 +27,27 @@ pkg/sanitize/
 
 1. `main.go` creates a `confluence.Client` and `filesystem.OS`, injects them into `sync.Syncer`.
 2. `Syncer.Sync()` calls `client.GetSpace()` then `client.GetPages()` (paginated, fetches all pages).
-3. For each page, it calls `client.GetPageContent()` and `getPageParentID()` separately - the list endpoint doesn't reliably return parent IDs.
-4. `tree.BuildTree()` assembles pages into a hierarchy using parent IDs. Nodes sorted by ID for deterministic output.
-5. `syncNode()` recursively walks the tree:
-   - Converts content via `converter.ConvertWithOptions()`
+3. For each page, it calls `client.GetPageContent()` and `getPageParent()` separately - the list endpoint doesn't reliably return parent IDs or types.
+4. `GetPages()` resolves non-page parents (databases, folders) by fetching them via `GetContentParent()` and adding them as synthetic nodes. Chains are followed until all parents resolve to known nodes or root.
+5. `tree.BuildTree()` assembles pages into a hierarchy using parent IDs. Nodes sorted by ID for deterministic output.
+6. `syncNode()` recursively walks the tree:
+   - Database/folder nodes (`Type == "database"` or `"folder"`) create directories only - no markdown, no content fetch
+   - Page nodes convert content via `converter.ConvertWithOptions()`
    - Writes Markdown files (with YAML frontmatter including a `version` field)
    - Downloads attachments to `_attachments/` directories
-6. On subsequent runs, version in frontmatter is compared to skip unchanged pages.
+7. On subsequent runs, version in frontmatter is compared to skip unchanged pages.
 
 ### Key interfaces
 
 Both are in `internal/` and injected into `Syncer`:
 
-- `confluence.Client` - API operations (GetSpace, GetPages, GetPageContent, GetAttachments, DownloadAttachment)
+- `confluence.Client` - API operations (GetSpace, GetPages, GetPageContent, GetAttachments, DownloadAttachment, GetContentParent)
 - `filesystem.FileSystem` - file I/O (MkdirAll, WriteFile, ReadFile, RemoveAll)
 
 ### Non-obvious behaviors
 
 - Pages with children OR attachments become directories with `index.md`. Leaf pages without attachments are plain `.md` files.
+- Database and folder parents (from Confluence's v2 API `parentType` field) are resolved into directory-only nodes. They create subdirectories but produce no markdown files.
 - Broken attachments are logged as warnings and skipped - they don't abort the sync.
 - Filename collisions (after sanitization) get `-2`, `-3`, etc. suffixes. Collision tracking is per-namespace (shared for roots, per-parent for non-roots).
 - The converter handles Confluence-specific XHTML elements like `ac:structured-macro` (code blocks), `ac:image`, `ri:attachment`, and rewrites attachment URLs to local `_attachments/` paths.
@@ -53,10 +56,13 @@ Both are in `internal/` and injected into `Syncer`:
 ## Testing
 
 ```bash
-mise run test          # unit tests
+mise run check         # unit tests + build binary (use this by default)
+mise run test          # unit tests only
 mise run test:race     # with race detector
 mise run lint          # golangci-lint
 ```
+
+Always run `mise run check` after changes to ensure the binary builds cleanly.
 
 Tests use:
 
