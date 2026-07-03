@@ -70,7 +70,7 @@ Fields named `*_ts`, `created_at`, or `modified_at` gain an `*_iso` sibling in R
 
 - `--site` - select the target site (base URL or configured alias). Env: `CONFLUENCE_SITE`.
 - `--fields` - comma-separated list limiting output to those top-level fields. Applies to data rows only, not `_meta`. Nested objects are returned whole when their parent field is selected; use `jq` for deeper access.
-- `--quiet` - suppress stdout data rows (the `_meta` trailer and stderr errors still emit).
+- `--quiet` - suppress all stdout (data rows and the `_meta` trailer). The exit code conveys success/failure and fatal errors still print to stderr.
 - `--timeout` - per-command deadline for API work.
 - `--trace` - structured diagnostics to stderr as JSONL (per-page fetches, retries, latencies).
 
