@@ -61,7 +61,7 @@ stdout carries a summary object then the trailer.
 
 - `--prune` - remove local files no longer in the space.
 - `--dry-run` - report without writing.
-- `--quiet` - suppress the stdout summary (trailer and stderr still emit).
+- `--quiet` - suppress all stdout (summary and trailer); rely on the exit code. Progress and warnings still go to stderr.
 
 ```bash
 confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs
