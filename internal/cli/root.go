@@ -206,7 +206,7 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 		oErr = &output.Error{
 			Err:    "page_not_found",
 			Detail: err.Error(),
-			Hint:   "Check the page ID/URL. Fetch a page with 'confluence page get <id|url>' (available in a later release), or list a space's pages with 'confluence page list --space <key>'.",
+			Hint:   "Check the page ID/URL. Fetch a page with 'confluence page get <id|url>', or list a space's pages with 'confluence page list --space <key>'.",
 			Code:   output.ExitGeneral,
 		}
 	case errors.Is(err, confluence.ErrSpaceNotFound):

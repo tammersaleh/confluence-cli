@@ -254,6 +254,385 @@ func TestPageList_SpaceNotFound(t *testing.T) {
 	}
 }
 
+// pageGetServer serves /wiki/api/v2/pages/{id}. Any id in notFound returns 404;
+// otherwise it returns a page whose body reflects the requested body-format.
+func pageGetServer(t *testing.T, notFound map[string]bool) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/wiki/api/v2/pages/"
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, prefix)
+		if notFound[id] {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		var body string
+		switch r.URL.Query().Get("body-format") {
+		case "atlas_doc_format":
+			// value is a JSON-encoded ADF document (a string in the API response).
+			body = `"body": {"atlas_doc_format": {"value": "{\"version\":1,\"type\":\"doc\",\"content\":[]}"}}`
+		case "view":
+			body = `"body": {"view": {"value": "<div>rendered</div>"}}`
+		default:
+			body = `"body": {"storage": {"value": "<p>Hello</p>"}}`
+		}
+
+		_, _ = w.Write([]byte(`{
+			"id": "` + id + `",
+			"title": "Page ` + id + `",
+			"spaceId": "space1",
+			"authorId": "user456",
+			"createdAt": "2024-01-15T10:30:00.000Z",
+			` + body + `,
+			"version": {"number": 5, "createdAt": "2024-06-20T14:45:00.000Z"},
+			"_links": {"webui": "/spaces/TEST/pages/` + id + `/Page"}
+		}`))
+	}))
+}
+
+func newPageGetCLI(t *testing.T, out, errBuf *bytes.Buffer) *CLI {
+	t.Helper()
+	c := &CLI{}
+	c.SetOutput(out, errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+	return c
+}
+
+func TestPageGet_Storage(t *testing.T) {
+	clearCredEnv(t)
+	server := pageGetServer(t, nil)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123"}, BodyFormat: "storage"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 row + 1 meta, got %d: %q", len(lines), out.String())
+	}
+	row := lines[0]
+	if row["input"] != "123" || row["id"] != "123" {
+		t.Errorf("input/id unexpected: %v", row)
+	}
+	if row["body"] != "<p>Hello</p>" {
+		t.Errorf("body = %v, want <p>Hello</p>", row["body"])
+	}
+	if row["body_format"] != "storage" {
+		t.Errorf("body_format = %v, want storage", row["body_format"])
+	}
+	if row["title"] != "Page 123" || row["version"] != float64(5) || row["web_url"] == "" {
+		t.Errorf("row missing title/version/web_url: %v", row)
+	}
+}
+
+func TestPageGet_ADFAlias(t *testing.T) {
+	clearCredEnv(t)
+	server := pageGetServer(t, nil)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123"}, BodyFormat: "adf"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	// The emitted line must carry body as a JSON object, not a quoted string.
+	firstLine := strings.SplitN(out.String(), "\n", 2)[0]
+	if !strings.Contains(firstLine, `"body":{`) {
+		t.Errorf("expected body as JSON object, got line: %q", firstLine)
+	}
+	lines := parseLines(t, out.String())
+	if lines[0]["body_format"] != "atlas_doc_format" {
+		t.Errorf("body_format = %v, want atlas_doc_format", lines[0]["body_format"])
+	}
+	if _, ok := lines[0]["body"].(map[string]any); !ok {
+		t.Errorf("body should decode as an object, got %T: %v", lines[0]["body"], lines[0]["body"])
+	}
+}
+
+func TestPageGet_View(t *testing.T) {
+	clearCredEnv(t)
+	server := pageGetServer(t, nil)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123"}, BodyFormat: "view"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if lines[0]["body"] != "<div>rendered</div>" {
+		t.Errorf("body = %v, want <div>rendered</div>", lines[0]["body"])
+	}
+	if lines[0]["body_format"] != "view" {
+		t.Errorf("body_format = %v, want view", lines[0]["body_format"])
+	}
+}
+
+func TestPageGet_MultipleBareIDs(t *testing.T) {
+	clearCredEnv(t)
+	server := pageGetServer(t, nil)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"100", "200"}, BodyFormat: "storage"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 3 {
+		t.Fatalf("expected 2 rows + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["input"] != "100" || lines[1]["input"] != "200" {
+		t.Errorf("rows missing inputs: %v, %v", lines[0], lines[1])
+	}
+}
+
+func TestPageGet_URLDerivesSite(t *testing.T) {
+	clearCredEnv(t)
+	server := pageGetServer(t, nil)
+	defer server.Close()
+
+	// No CONFLUENCE_SITE: the site comes from the URL arg.
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{server.URL + "/wiki/spaces/ENG/pages/777/Title"}, BodyFormat: "storage"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if lines[0]["id"] != "777" {
+		t.Errorf("id = %v, want 777", lines[0]["id"])
+	}
+	if lines[0]["input"] != server.URL+"/wiki/spaces/ENG/pages/777/Title" {
+		t.Errorf("input = %v, want the URL", lines[0]["input"])
+	}
+}
+
+func TestPageGet_MixedSiteURLs(t *testing.T) {
+	clearCredEnv(t)
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{
+		"https://acme.atlassian.net/wiki/spaces/ENG/pages/1/A",
+		"https://other.atlassian.net/wiki/spaces/ENG/pages/2/B",
+	}, BodyFormat: "storage"}
+	err := cmd.Run(c)
+
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Err != "invalid_input" || oErr.Code != output.ExitGeneral {
+		t.Errorf("got Err=%q Code=%d, want invalid_input/%d", oErr.Err, oErr.Code, output.ExitGeneral)
+	}
+}
+
+func TestPageGet_PerItemNotFound(t *testing.T) {
+	clearCredEnv(t)
+	server := pageGetServer(t, map[string]bool{"404": true})
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123", "404"}, BodyFormat: "storage"}
+	err := cmd.Run(c)
+
+	var exitErr *output.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	if exitErr.Code != output.ExitGeneral {
+		t.Errorf("exit code = %d, want %d", exitErr.Code, output.ExitGeneral)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 3 {
+		t.Fatalf("expected success row + error row + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["id"] != "123" {
+		t.Errorf("first row should be success: %v", lines[0])
+	}
+	if lines[1]["error"] != "page_not_found" || lines[1]["input"] != "404" {
+		t.Errorf("second row should be inline error for 404: %v", lines[1])
+	}
+	meta := lines[2]["_meta"].(map[string]any)
+	if meta["error_count"] != float64(1) {
+		t.Errorf("error_count = %v, want 1", meta["error_count"])
+	}
+}
+
+func TestPageGet_BadBodyFormat(t *testing.T) {
+	clearCredEnv(t)
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123"}, BodyFormat: "xml"}
+	err := cmd.Run(c)
+
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Err != "invalid_input" || oErr.Code != output.ExitGeneral {
+		t.Errorf("got Err=%q Code=%d, want invalid_input/%d", oErr.Err, oErr.Code, output.ExitGeneral)
+	}
+}
+
+// pageGetMarkdownServer serves a single page (storage body) plus its attachments
+// list. The attachments JSON is served verbatim from atts.
+func pageGetMarkdownServer(t *testing.T, storageBody, atts string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/wiki/api/v2/pages/"
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		rest := strings.TrimPrefix(r.URL.Path, prefix)
+		if strings.HasSuffix(rest, "/attachments") {
+			_, _ = w.Write([]byte(atts))
+			return
+		}
+		id := rest
+		_, _ = w.Write([]byte(`{
+			"id": "` + id + `",
+			"title": "Page ` + id + `",
+			"spaceId": "space1",
+			"authorId": "user456",
+			"createdAt": "2024-01-15T10:30:00.000Z",
+			"body": {"storage": {"value": ` + jsonQuote(storageBody) + `}},
+			"version": {"number": 5, "createdAt": "2024-06-20T14:45:00.000Z"},
+			"_links": {"webui": "/spaces/TEST/pages/` + id + `/Page"}
+		}`))
+	}))
+}
+
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func TestPageGet_Markdown(t *testing.T) {
+	clearCredEnv(t)
+	storage := `<p>See <ac:image><ri:attachment ri:filename="diagram.png"/></ac:image></p>`
+	// DownloadLink lacks the /wiki prefix, exercising the absolutizer's prefixing.
+	atts := `{"results":[{"id":"att1","title":"diagram.png","mediaType":"image/png","downloadLink":"/download/attachments/123/diagram.png"}],"_links":{"next":""}}`
+	server := pageGetMarkdownServer(t, storage, atts)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123"}, BodyFormat: "markdown"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 row + 1 meta, got %d: %q", len(lines), out.String())
+	}
+	row := lines[0]
+	if row["body_format"] != "markdown" {
+		t.Errorf("body_format = %v, want markdown", row["body_format"])
+	}
+	if row["source_body_format"] != "storage" {
+		t.Errorf("source_body_format = %v, want storage", row["source_body_format"])
+	}
+	body, _ := row["body"].(string)
+	wantURL := server.URL + "/wiki/download/attachments/123/diagram.png"
+	if !strings.Contains(body, wantURL) {
+		t.Errorf("body missing absolute attachment URL %q:\n%s", wantURL, body)
+	}
+	if strings.Contains(body, "_attachments/") {
+		t.Errorf("body should not contain local _attachments path:\n%s", body)
+	}
+}
+
+func TestPageGet_MarkdownNoAttachments(t *testing.T) {
+	clearCredEnv(t)
+	storage := `<h1>Title</h1><p>Just text.</p>`
+	atts := `{"results":[],"_links":{"next":""}}`
+	server := pageGetMarkdownServer(t, storage, atts)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123"}, BodyFormat: "markdown"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 row + 1 meta, got %d: %q", len(lines), out.String())
+	}
+	row := lines[0]
+	if row["body_format"] != "markdown" || row["source_body_format"] != "storage" {
+		t.Errorf("format fields unexpected: %v", row)
+	}
+	body, _ := row["body"].(string)
+	if !strings.Contains(body, "# Title") {
+		t.Errorf("body missing converted heading:\n%s", body)
+	}
+}
+
 func TestPageList_SiteFlagMismatch(t *testing.T) {
 	clearCredEnv(t)
 	var out, errBuf bytes.Buffer
