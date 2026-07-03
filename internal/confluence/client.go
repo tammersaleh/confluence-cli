@@ -1,6 +1,7 @@
 package confluence
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -81,10 +83,33 @@ func statusToError(statusCode int, path string) *StatusError {
 	return &StatusError{StatusCode: statusCode, Endpoint: path, Err: sentinel}
 }
 
+// errBodyLimit bounds how much of an error response body we read when
+// extracting a human-readable message. 8KB is plenty for Confluence errors.
+const errBodyLimit = 8 << 10
+
+// reqOptions carries per-request configuration for doCore. bodyFactory is nil
+// for GET-style requests; when set it is called fresh on EACH attempt so retries
+// resend the body.
+type reqOptions struct {
+	query       url.Values
+	headers     http.Header               // extra headers (Content-Type, X-Atlassian-Token, etc.)
+	bodyFactory func() (io.Reader, error) // nil for bodyless requests; called per attempt
+}
+
+// doRequest performs a bodyless (typically GET) request. It delegates to doCore
+// with a nil body, preserving the original signature and behavior.
 func (c *client) doRequest(ctx context.Context, method, path string, query url.Values) (*http.Response, error) {
+	return c.doCore(ctx, method, path, reqOptions{query: query})
+}
+
+// doCore is the shared request/retry/trace/status engine. It builds the URL from
+// path + query, retries retryable statuses with backoff, emits trace events, and
+// maps non-2xx responses to *StatusError (or *httpx.RateLimitError on 429
+// exhaustion). When opts.bodyFactory is set it is invoked fresh on each attempt.
+func (c *client) doCore(ctx context.Context, method, path string, opts reqOptions) (*http.Response, error) {
 	u := c.baseURL + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
+	if len(opts.query) > 0 {
+		u += "?" + opts.query.Encode()
 	}
 
 	tracer := httpx.TracerFrom(ctx)
@@ -106,12 +131,26 @@ func (c *client) doRequest(ctx context.Context, method, path string, query url.V
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, method, u, nil)
+		var body io.Reader
+		if opts.bodyFactory != nil {
+			b, err := opts.bodyFactory()
+			if err != nil {
+				return nil, err
+			}
+			body = b
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, u, body)
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("Authorization", c.authHeader)
 		req.Header.Set("Accept", "application/json")
+		for k, vs := range opts.headers {
+			for _, v := range vs {
+				req.Header.Set(k, v)
+			}
+		}
 
 		start := time.Now()
 		resp, err := c.httpClient.Do(req)
@@ -152,6 +191,7 @@ func (c *client) doRequest(ctx context.Context, method, path string, query url.V
 		}
 
 		if statusErr != nil {
+			statusErr.Message = extractAPIMessage(resp.Body)
 			_ = resp.Body.Close()
 			return nil, statusErr
 		}
@@ -169,6 +209,87 @@ func (c *client) doRequest(ctx context.Context, method, path string, query url.V
 		return nil, &httpx.RateLimitError{Endpoint: path, Retries: maxRetries, Err: wrapped}
 	}
 	return nil, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
+}
+
+// extractAPIMessage reads a bounded prefix of an error response body and
+// best-effort extracts a human message from Confluence's error JSON shapes:
+// {"message":"..."} or {"errors":[{"title":"..."}]} or
+// {"errors":[{"detail":"..."}]}. Returns "" on any parse failure.
+func extractAPIMessage(body io.Reader) string {
+	data, err := io.ReadAll(io.LimitReader(body, errBodyLimit))
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	var parsed struct {
+		Message string `json:"message"`
+		Errors  []struct {
+			Title  string `json:"title"`
+			Detail string `json:"detail"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return ""
+	}
+	if parsed.Message != "" {
+		return parsed.Message
+	}
+	for _, e := range parsed.Errors {
+		if e.Title != "" {
+			return e.Title
+		}
+		if e.Detail != "" {
+			return e.Detail
+		}
+	}
+	return ""
+}
+
+// doJSON sends payload as a JSON request body. The payload is marshaled once;
+// bodyFactory returns a fresh bytes.Reader over those bytes on each attempt, so
+// retries resend the identical body.
+func (c *client) doJSON(ctx context.Context, method, path string, query url.Values, payload any) (*http.Response, error) {
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request body: %w", err)
+	}
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Accept", "application/json")
+	return c.doCore(ctx, method, path, reqOptions{
+		query:   query,
+		headers: headers,
+		bodyFactory: func() (io.Reader, error) {
+			return bytes.NewReader(b), nil
+		},
+	})
+}
+
+// doMultipart sends a multipart/form-data body built by build. The form is
+// rendered once to fixed bytes (capturing the writer's boundary for the
+// Content-Type header); bodyFactory returns a fresh reader over those bytes on
+// each attempt so retries resend an identical body.
+func (c *client) doMultipart(ctx context.Context, method, path string, query url.Values, build func(*multipart.Writer) error) (*http.Response, error) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if err := build(w); err != nil {
+		return nil, fmt.Errorf("building multipart body: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("closing multipart body: %w", err)
+	}
+	b := buf.Bytes()
+
+	headers := http.Header{}
+	headers.Set("Content-Type", w.FormDataContentType())
+	headers.Set("X-Atlassian-Token", "nocheck")
+	headers.Set("Accept", "application/json")
+	return c.doCore(ctx, method, path, reqOptions{
+		query:   query,
+		headers: headers,
+		bodyFactory: func() (io.Reader, error) {
+			return bytes.NewReader(b), nil
+		},
+	})
 }
 
 type currentUserResponse struct {

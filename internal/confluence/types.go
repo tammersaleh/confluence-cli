@@ -25,9 +25,13 @@ type StatusError struct {
 	StatusCode int
 	Endpoint   string // the API path, e.g. /wiki/api/v2/pages/123
 	Err        error
+	Message    string // best-effort human message extracted from the response body
 }
 
 func (e *StatusError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("%v: status %d on %s: %s", e.Err, e.StatusCode, e.Endpoint, e.Message)
+	}
 	return fmt.Sprintf("%v: status %d on %s", e.Err, e.StatusCode, e.Endpoint)
 }
 

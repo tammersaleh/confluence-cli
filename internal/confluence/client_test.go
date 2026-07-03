@@ -3,8 +3,10 @@ package confluence
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1762,6 +1764,188 @@ func TestClient_GetUser(t *testing.T) {
 				t.Errorf("Email = %q, want %q", user.Email, tt.wantEmail)
 			}
 		})
+	}
+}
+
+func TestClient_doJSON(t *testing.T) {
+	type payload struct {
+		Title string `json:"title"`
+		N     int    `json:"n"`
+	}
+	want := payload{Title: "Hello", N: 7}
+
+	var (
+		gotMethod      string
+		gotContentType string
+		gotAccept      string
+		gotBody        []byte
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotContentType = r.Header.Get("Content-Type")
+		gotAccept = r.Header.Get("Accept")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Write([]byte(`{"id":"1"}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token").(*client)
+	resp, err := c.doJSON(context.Background(), http.MethodPost, "/wiki/api/v2/pages", nil, want)
+	if err != nil {
+		t.Fatalf("doJSON() error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotContentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", gotContentType)
+	}
+	if gotAccept != "application/json" {
+		t.Errorf("Accept = %q, want application/json", gotAccept)
+	}
+	if string(gotBody) != `{"title":"Hello","n":7}` {
+		t.Errorf("body = %q, want marshaled payload", string(gotBody))
+	}
+
+	var decoded struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if decoded.ID != "1" {
+		t.Errorf("response id = %q, want 1", decoded.ID)
+	}
+}
+
+func TestClient_doJSON_RetryReplaysBody(t *testing.T) {
+	old := baseRetryDelay
+	baseRetryDelay = time.Millisecond
+	defer func() { baseRetryDelay = old }()
+
+	var (
+		calls      int
+		secondBody []byte
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		body, _ := io.ReadAll(r.Body)
+		if calls == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		secondBody = body
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token").(*client)
+	resp, err := c.doJSON(context.Background(), http.MethodPost, "/wiki/api/v2/pages", nil, map[string]string{"title": "Hi"})
+	if err != nil {
+		t.Fatalf("doJSON() error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2 (one 503, one 200)", calls)
+	}
+	if string(secondBody) != `{"title":"Hi"}` {
+		t.Errorf("second attempt body = %q, want full payload resent", string(secondBody))
+	}
+}
+
+func TestClient_doMultipart(t *testing.T) {
+	var (
+		gotContentType string
+		gotToken       string
+		gotAccept      string
+		gotField       string
+		gotFile        string
+		gotFileName    string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		gotToken = r.Header.Get("X-Atlassian-Token")
+		gotAccept = r.Header.Get("Accept")
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("ParseMultipartForm: %v", err)
+		}
+		gotField = r.FormValue("minorEdit")
+		if f, hdr, err := r.FormFile("file"); err == nil {
+			defer f.Close()
+			gotFileName = hdr.Filename
+			data, _ := io.ReadAll(f)
+			gotFile = string(data)
+		} else {
+			t.Errorf("FormFile: %v", err)
+		}
+		w.Write([]byte(`{"results":[]}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token").(*client)
+	resp, err := c.doMultipart(context.Background(), http.MethodPut, "/wiki/api/v2/pages/1/attachments", nil, func(mw *multipart.Writer) error {
+		if err := mw.WriteField("minorEdit", "true"); err != nil {
+			return err
+		}
+		fw, err := mw.CreateFormFile("file", "note.txt")
+		if err != nil {
+			return err
+		}
+		_, err = fw.Write([]byte("file contents"))
+		return err
+	})
+	if err != nil {
+		t.Fatalf("doMultipart() error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if !strings.HasPrefix(gotContentType, "multipart/form-data") {
+		t.Errorf("Content-Type = %q, want multipart/form-data prefix", gotContentType)
+	}
+	if gotToken != "nocheck" {
+		t.Errorf("X-Atlassian-Token = %q, want nocheck", gotToken)
+	}
+	if gotAccept != "application/json" {
+		t.Errorf("Accept = %q, want application/json", gotAccept)
+	}
+	if gotField != "true" {
+		t.Errorf("minorEdit field = %q, want true", gotField)
+	}
+	if gotFileName != "note.txt" {
+		t.Errorf("filename = %q, want note.txt", gotFileName)
+	}
+	if gotFile != "file contents" {
+		t.Errorf("file body = %q, want file contents", gotFile)
+	}
+}
+
+func TestClient_StatusError_Message(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"errors":[{"title":"bad body"}]}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token").(*client)
+	_, err := c.doJSON(context.Background(), http.MethodPost, "/wiki/api/v2/pages", nil, map[string]string{"x": "y"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrAPIError) {
+		t.Errorf("expected error to wrap ErrAPIError, got %v", err)
+	}
+	var se *StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *StatusError, got %T: %v", err, err)
+	}
+	if !strings.Contains(se.Message, "bad body") {
+		t.Errorf("Message = %q, want to contain 'bad body'", se.Message)
+	}
+	if !strings.Contains(se.Error(), "bad body") {
+		t.Errorf("Error() = %q, want to contain 'bad body'", se.Error())
 	}
 }
 
