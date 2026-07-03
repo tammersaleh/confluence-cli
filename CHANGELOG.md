@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.5.0](https://github.com/tammersaleh/confluence-sync/compare/v1.4.0...v1.5.0) (2026-07-03)
+
+
+### Features
+
+* add ListChildren, GetAncestors, ListSpaces ([5809b3f](https://github.com/tammersaleh/confluence-sync/commit/5809b3ffe114b15068aba279a63ea90e8e5a0e04))
+* add page children/ancestors/tree and space list ([9538007](https://github.com/tammersaleh/confluence-sync/commit/953800761b420b92296145ec991ff595cbff8651))
+
+
+### Bug Fixes
+
+* space_not_found hint no longer calls space list unavailable ([3d43fa8](https://github.com/tammersaleh/confluence-sync/commit/3d43fa8ff5984eadf6d680d85af95155dbb97b3c))
+
 ## [1.4.0](https://github.com/tammersaleh/confluence-sync/compare/v1.3.0...v1.4.0) (2026-07-03)
 
 
