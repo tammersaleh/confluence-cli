@@ -87,6 +87,50 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSaveCredentialsAtomicOverwrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.json")
+
+	if err := SaveCredentials(path, &Credentials{Sites: map[string]SiteCredentials{
+		"https://acme.atlassian.net": {Email: "a@example.com", APIToken: "t1"},
+	}}); err != nil {
+		t.Fatalf("first SaveCredentials: %v", err)
+	}
+	// Overwrite (exercises os.Rename over an existing target).
+	if err := SaveCredentials(path, &Credentials{Sites: map[string]SiteCredentials{
+		"https://other.atlassian.net": {Email: "b@example.com", APIToken: "t2"},
+	}}); err != nil {
+		t.Fatalf("overwrite SaveCredentials: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("file mode = %o, want 0600", perm)
+	}
+
+	out, err := LoadCredentials(path)
+	if err != nil {
+		t.Fatalf("LoadCredentials: %v", err)
+	}
+	if _, ok := out.Sites["https://acme.atlassian.net"]; ok {
+		t.Error("stale site survived overwrite")
+	}
+	if _, ok := out.Sites["https://other.atlassian.net"]; !ok {
+		t.Error("new site missing after overwrite")
+	}
+
+	// No temp files should linger in the directory.
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("expected only credentials.json, got %d entries: %v", len(entries), entries)
+	}
+}
+
 // clearEnv sets all six recognized env vars to empty so the dev shell can't leak in.
 func clearEnv(t *testing.T) {
 	t.Helper()

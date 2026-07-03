@@ -87,9 +87,12 @@ func LoadCredentials(path string) (*Credentials, error) {
 }
 
 // SaveCredentials writes credentials to the given path with 0600 permissions.
-// Creates parent directories if needed.
+// Creates parent directories if needed. The write is atomic: data goes to a
+// temp file in the same directory which is then renamed over the target, so a
+// crash mid-write can never leave a truncated or empty credentials file.
 func SaveCredentials(path string, creds *Credentials) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 
@@ -97,7 +100,27 @@ func SaveCredentials(path string, creds *Credentials) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+
+	// Temp file in the same dir guarantees rename stays on one filesystem.
+	tmp, err := os.CreateTemp(dir, ".credentials-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed away
+
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // ResolveCredentials merges environment and stored credentials for a site,
