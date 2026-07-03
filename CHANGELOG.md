@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.0](https://github.com/tammersaleh/confluence-sync/compare/v1.3.0...v1.4.0) (2026-07-03)
+
+
+### Features
+
+* add attachment list/download and space info ([1685551](https://github.com/tammersaleh/confluence-sync/commit/1685551e6a4938f3e6e57beb25c4547080463542))
+* add GetSpaceByID and GetAttachmentByID, enrich Space ([d3c4be3](https://github.com/tammersaleh/confluence-sync/commit/d3c4be3f202b1b99c57d22c6106cdb369a65f0f1))
+
 ## [1.3.0](https://github.com/tammersaleh/confluence-sync/compare/v1.2.0...v1.3.0) (2026-07-03)
 
 
