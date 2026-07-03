@@ -157,31 +157,54 @@ func (c *CLI) ResolveCredentials(siteFromArg string) (*auth.ResolvedCredentials,
 
 // ClassifyError maps Confluence sentinels to structured errors, delegating
 // anything else to the domain-agnostic httpx classifier.
+//
+// Typed transport errors (rate limits, context cancellation/timeout) are
+// matched first, before the domain-sentinel switch: a rate-limit error may
+// wrap a domain sentinel like ErrAPIError, and it must classify as
+// rate_limited, not api_error. Everything else that carries a domain sentinel
+// (reachable via errors.Is through StatusError.Unwrap) is classified here;
+// residual errors fall through to httpx.
 func (c *CLI) ClassifyError(err error) *output.Error {
+	// Transport errors httpx owns take precedence over domain sentinels.
+	var rl *httpx.RateLimitError
+	if errors.As(err, &rl) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) {
+		return httpx.ClassifyError(err)
+	}
+
+	var oErr *output.Error
 	switch {
 	case errors.Is(err, confluence.ErrUnauthorized):
-		return &output.Error{
+		oErr = &output.Error{
 			Err:    "unauthorized",
 			Detail: err.Error(),
 			Hint:   "Run 'confluence auth login' or check CONFLUENCE_EMAIL/CONFLUENCE_API_TOKEN",
 			Code:   output.ExitAuth,
 		}
 	case errors.Is(err, confluence.ErrForbidden):
-		return &output.Error{
+		oErr = &output.Error{
 			Err:    "forbidden",
 			Detail: err.Error(),
 			Hint:   "Your account lacks permission for this resource.",
 			Code:   output.ExitAuth,
 		}
+	case errors.Is(err, confluence.ErrPageNotFound):
+		oErr = &output.Error{
+			Err:    "page_not_found",
+			Detail: err.Error(),
+			Hint:   "Check the page ID/URL. Fetch a page with 'confluence page get <id|url>' (available in a later release), or list a space's pages with 'confluence page list --space <key>'.",
+			Code:   output.ExitGeneral,
+		}
 	case errors.Is(err, confluence.ErrSpaceNotFound):
-		return &output.Error{
+		oErr = &output.Error{
 			Err:    "space_not_found",
 			Detail: err.Error(),
 			Hint:   "Check the space key/URL. List spaces with 'confluence space list' (available in a later release).",
 			Code:   output.ExitGeneral,
 		}
 	case errors.Is(err, confluence.ErrAPIError):
-		return &output.Error{
+		oErr = &output.Error{
 			Err:    "api_error",
 			Detail: err.Error(),
 			Code:   output.ExitGeneral,
@@ -189,4 +212,17 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 	default:
 		return httpx.ClassifyError(err)
 	}
+
+	return withEndpoint(oErr, err)
+}
+
+// withEndpoint copies the endpoint from a wrapped *confluence.StatusError onto
+// the classified error when it doesn't already carry one, so per-page failures
+// during a sync stay traceable to the API path that produced them.
+func withEndpoint(oErr *output.Error, err error) *output.Error {
+	var se *confluence.StatusError
+	if errors.As(err, &se) && oErr.Endpoint == "" {
+		oErr.Endpoint = se.Endpoint
+	}
+	return oErr
 }
