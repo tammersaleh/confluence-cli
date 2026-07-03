@@ -4,10 +4,11 @@ An agent-first Confluence CLI. The binary is `confluence`; the repository and Go
 module stay `confluence-sync`. Output is JSONL (one JSON object per line);
 commands are non-interactive and scriptable, built for LLM agents and CI.
 
-The `version`, `space sync`, and `auth` commands ship today. A wider read/write
-surface (pages, attachments, search, comments, labels, users, and authoring) is
-designed but not yet implemented. See `SPEC.md` for the full contract and planned
-commands, and `skills/confluence-cli/SKILL.md` for the agent skill.
+The `version`, `space sync`, `auth`, `page list`, and `page get` commands ship
+today. A wider read/write surface (more page reads, attachments, search,
+comments, labels, users, and authoring) is designed but not yet implemented. See
+`SPEC.md` for the full contract and planned commands, and
+`skills/confluence-cli/SKILL.md` for the agent skill.
 
 ## Installation
 
@@ -109,6 +110,42 @@ Accepts space URLs in these formats:
 - `https://acme.atlassian.net/wiki/spaces/ENG`
 - `https://acme.atlassian.net/wiki/spaces/ENG/overview`
 - `https://acme.atlassian.net/wiki/spaces/ENG/pages/...`
+
+### page list
+
+List pages in a space. `--space` takes a bare key or a space/page URL. Use
+`--limit`, `--cursor`, and `--all` to control paging.
+
+```bash
+confluence page list --space ENG
+confluence page list --space ENG --all
+```
+
+```jsonl
+{"id":"123456","title":"API Design","type":"page","space_key":"ENG","parent_id":"123400"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### page get
+
+Fetch pages by numeric id or page URL; all arguments must be on one site. Each
+row echoes its `input`. `--body-format` (default `storage`) also accepts
+`atlas_doc_format` (alias `adf`), `view`, and `markdown` (alias `md`). ADF `body`
+is a nested JSON object; `markdown` is derived from storage with attachment
+references resolved to remote URLs and adds `source_body_format`.
+
+```bash
+confluence page get 123456
+confluence page get 123456 --body-format markdown
+```
+
+```jsonl
+{"input":"123456","id":"123456","title":"API Design","space_id":"98765","version":5,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","modified_at":"2024-06-20T14:45:00.000Z","modified_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456","body":"<p>See the design.</p>","body_format":"storage"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+Bad ids or pages you can't read appear inline on stdout and bump
+`_meta.error_count`.
 
 ## Sync behavior
 

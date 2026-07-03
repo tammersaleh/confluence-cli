@@ -1,6 +1,6 @@
 ---
 name: confluence-cli
-description: "Agent-first Confluence CLI: sync spaces to Markdown, with a read/write command surface arriving in later releases"
+description: "Agent-first Confluence CLI: sync spaces to Markdown and read pages (page list/get), with the wider read/write surface arriving in later releases"
 argument-hint: ""
 allowed-tools:
   - Bash(confluence *)
@@ -11,8 +11,9 @@ allowed-tools:
 Agent-first CLI for Confluence. JSONL output (one JSON object per line). Every
 command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 
-Today the `version`, `space sync`, and `auth` commands ship. The wider read/write
-surface below is planned but not yet implemented - do not invoke it.
+Today the `version`, `space sync`, `auth`, `page list`, and `page get` commands
+ship. The wider read/write surface below is planned but not yet implemented - do
+not invoke it.
 
 ## Prerequisites
 
@@ -101,11 +102,49 @@ Preview before writing:
 confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs --dry-run
 ```
 
+### page list
+
+List pages in a space. `--space` is a bare key or a space/page URL. Page through
+with `--limit`/`--cursor`, or fetch everything with `--all`.
+
+```bash
+confluence page list --space ENG
+confluence page list --space ENG --limit 50 --cursor eyJpZCI6...
+confluence page list --space ENG --all
+```
+
+```jsonl
+{"id":"123456","title":"API Design","type":"page","space_key":"ENG","parent_id":"123400"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### page get
+
+Fetch pages by numeric id or page URL. All arguments must be on one site (one
+site per invocation). Each row echoes its `input`.
+
+`--body-format` defaults to `storage`; also `atlas_doc_format` (alias `adf`),
+`view`, and `markdown` (alias `md`). ADF `body` is a nested JSON object;
+`markdown` is derived from the storage body with attachments resolved to remote
+URLs and adds `source_body_format`. Bad ids or unreadable pages appear inline on
+stdout and bump `_meta.error_count`.
+
+```bash
+confluence page get 123456
+confluence page get 123456 789012 --body-format markdown
+confluence page get https://acme.atlassian.net/wiki/spaces/ENG/pages/123456 --body-format adf
+```
+
+```jsonl
+{"input":"123456","id":"123456","title":"API Design","space_id":"98765","version":5,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","modified_at":"2024-06-20T14:45:00.000Z","modified_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456","body":"# API Design\n\nSee the design.","body_format":"markdown","source_body_format":"storage"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
 ## Planned (not yet available)
 
 Designed but not implemented. Do not run these yet:
 
-- `confluence page get|list|children|ancestors|tree` - read pages and hierarchy.
+- `confluence page children|ancestors|tree` - read page hierarchy.
 - `confluence space list|info` - list and inspect spaces.
 - `confluence attachment list|download|upload` - attachments.
 - `confluence search <cql>` - CQL search.

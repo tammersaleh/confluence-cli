@@ -6,9 +6,10 @@ one JSON object per line; commands are non-interactive and scriptable. Built on
 Kong. Auth is an API token + email over HTTP Basic.
 
 `SPEC.md` is the source of truth for the full command surface and output
-contract. The `version`, `space sync`, and `auth` commands ship today; the rest
-is designed but not implemented. See `README.md` for user-facing usage and
-`skills/confluence-cli/SKILL.md` for the agent-facing skill.
+contract. The `version`, `space sync`, `auth`, `page list`, and `page get`
+commands ship today; the rest is designed but not implemented. See `README.md`
+for user-facing usage and `skills/confluence-cli/SKILL.md` for the agent-facing
+skill.
 
 ## Architecture
 
@@ -20,6 +21,7 @@ internal/
     version.go                 `version` command.
     space.go                   `space sync` command (wraps the sync engine).
     auth.go                    `auth login|status|logout` commands.
+    page.go                    `page list` and `page get` commands. Derives site/space from --space or URL args; --body-format incl. derived markdown.
   output/
     output.go                  Printer (JSONL rows + _meta trailer), Meta, Error, ExitError, exit codes, field filtering.
     errors.go                  Error.AsItem for inline per-item errors.
@@ -33,6 +35,8 @@ internal/
     client.go                  HTTP client for Confluence Cloud API v2. Retry w/ exponential backoff + jitter. Sentinels (ErrUnauthorized, ErrSpaceNotFound, ...) mapped to structured errors in internal/cli.
     types.go                   API response types: Space, Page, PageContent, Attachment.
     url.go                     Parses Confluence space URLs into baseURL + spaceKey.
+  confluenceurl/
+    confluenceurl.go           Parses page/space URLs into a Ref (Kind, BaseURL, SpaceKey, PageID). CommonSite enforces one-site-per-invocation for page get.
   converter/
     converter.go               Converts Confluence storage format (XHTML) to GFM Markdown.
   sync/
@@ -102,17 +106,19 @@ old Cobra tool's `1 = config / 2 = auth / 3 = api / 4 = filesystem` codes
 
 ## Commands
 
-The `version`, `space sync`, and `auth` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `auth`, `page list`, and `page get` commands ship today. All honor `--quiet` and `--timeout`.
 
 - `confluence version` - emits the build version, then the trailer.
 - `confluence space sync <space-url> <output-dir>` - one-way space crawl to local Markdown. Flags: `--prune`, `--dry-run`, `--quiet`, `--timeout`, `--trace`. Progress goes to stderr; stdout carries a single summary object then the trailer.
 - `confluence auth login --site <url> --email <email>` - read the API token from stdin, validate it, and store it under the canonical site URL. Token never comes from argv.
 - `confluence auth status` - list configured sites and any active env override, without printing secrets.
 - `confluence auth logout [<site>]` - remove stored credentials for a site. The `<site>` positional is optional when exactly one site is configured.
+- `confluence page list --space <key|url>` - list pages in a space. Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `space_key`, and `parent_id`/`parent_type` when present.
+- `confluence page get <id|url>...` - fetch pages by id or URL (one site per invocation). `--body-format storage|atlas_doc_format (adf)|view|markdown (md)`, default `storage`. ADF `body` is a nested object; `markdown` is derived from storage (attachments resolved to remote URLs) and adds `source_body_format`. Per-item errors go inline and bump `_meta.error_count`.
 
-The rest of the surface (`page`, `attachment`, `search`, `comment`, `label`,
-`user`, and the write commands) is designed but not yet implemented. See
-`SPEC.md`.
+The rest of the surface (`page children|ancestors|tree`, `attachment`, `search`,
+`comment`, `label`, `user`, and the write commands) is designed but not yet
+implemented. See `SPEC.md`.
 
 ### Global flags
 

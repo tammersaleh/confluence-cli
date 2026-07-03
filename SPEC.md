@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, and `auth` commands ship today (see "Commands available now"); everything under "Planned commands" is designed but not yet implemented.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, `auth`, `page list`, and `page get` commands ship today (see "Commands available now"); everything under "Planned commands" is designed but not yet implemented.
 
 ## Design principles
 
@@ -91,7 +91,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, and `auth` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `auth`, `page list`, and `page get` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### version
 
@@ -162,14 +162,65 @@ $ confluence auth logout https://acme.atlassian.net
 {"_meta":{"has_more":false}}
 ```
 
+### page list
+
+```text
+confluence page list --space <key|url> [--limit <n>] [--cursor <c>] [--all]
+```
+
+List pages in a space. `--space` takes a bare space key or a space/page URL; a URL selects the site. One object per page, then the trailer.
+
+- `--limit` - page size requested from the API (default 25).
+- `--cursor` - opaque cursor from a prior `_meta.next_cursor`, to fetch the next page.
+- `--all` - loop until the cursor is exhausted, emitting every page. The trailer omits `next_cursor` since nothing remains.
+
+Each row carries `id`, `title`, `type`, and `space_key`; `parent_id` and `parent_type` appear when the page has a parent.
+
+```jsonl
+$ confluence page list --space ENG
+{"id":"123456","title":"API Design","type":"page","space_key":"ENG","parent_id":"123400"}
+{"id":"123400","title":"Architecture","type":"page","space_key":"ENG"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### page get
+
+```text
+confluence page get <id|url>... [--body-format storage|atlas_doc_format|view|markdown]
+```
+
+Fetch one or more pages by numeric id or page URL. All arguments must resolve to a single site (one site per invocation); mixing sites is an error. Each row echoes the `input` that produced it.
+
+`--body-format` selects the body representation (default `storage`):
+
+- `storage` - Confluence storage format (XHTML), returned as a string.
+- `atlas_doc_format` (alias `adf`) - ADF; the `body` field is a nested JSON object, not a string.
+- `view` - rendered view HTML, as a string.
+- `markdown` (alias `md`) - derived by converting the storage body to GFM, with attachment references resolved to absolute remote URLs. Costs one extra API call per page to list attachments. Adds `source_body_format:"storage"` and sets `body_format:"markdown"`.
+
+Per-item errors (bad id, no permission) appear inline on stdout and bump `_meta.error_count`.
+
+```jsonl
+$ confluence page get 123456
+{"input":"123456","id":"123456","title":"API Design","space_id":"98765","version":5,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","modified_at":"2024-06-20T14:45:00.000Z","modified_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456","body":"<p>See the design.</p>","body_format":"storage"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+Markdown, with a failed lookup interleaved:
+
+```jsonl
+$ confluence page get 123456 99999 --body-format markdown
+{"input":"123456","id":"123456","title":"API Design","space_id":"98765","version":5,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","modified_at":"2024-06-20T14:45:00.000Z","modified_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456","body":"# API Design\n\nSee the design.","body_format":"markdown","source_body_format":"storage"}
+{"input":"99999","error":"page_not_found","detail":"No page with id '99999'","hint":"confluence page list --space ENG"}
+{"_meta":{"has_more":false,"error_count":1}}
+```
+
 ## Planned commands (not yet implemented)
 
 Everything below is designed but not built. Do not invoke these yet; they are documented so the surface is settled before implementation. They land across phases (`page` first, then attachments/space, then the wider read surface, then writes).
 
 ### Page (read)
 
-- `confluence page get <id|url>...` - fetch pages; `--body-format storage|adf|view|markdown` (markdown is a derived representation). Not yet available.
-- `confluence page list --space <key|url>` - list pages in a space; `--limit --cursor --all`. Not yet available.
 - `confluence page children <id|url>` - direct children of a page. Not yet available.
 - `confluence page ancestors <id|url>` - ancestor chain of a page. Not yet available.
 - `confluence page tree --space <key|url>` - hierarchical page tree, pending acceptable ordering semantics. Not yet available.
