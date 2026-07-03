@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/tammersaleh/confluence-sync/compare/v1.1.0...v1.2.0) (2026-07-03)
+
+
+### Features
+
+* add auth login, status, and logout ([767c890](https://github.com/tammersaleh/confluence-sync/commit/767c890f4a799b4a2b5673f7aedfe3d304624dab))
+* add GetCurrentUser domain method ([d7b5af0](https://github.com/tammersaleh/confluence-sync/commit/d7b5af0c9ee1fed9802aa92879b02c579d1a5064))
+
 ## [1.1.0](https://github.com/tammersaleh/confluence-sync/compare/v1.0.0...v1.1.0) (2026-07-03)
 
 
