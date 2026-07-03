@@ -5,7 +5,9 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tammersaleh/confluence-sync/internal/auth"
@@ -34,23 +36,24 @@ type CLI struct {
 	Space   SpaceCmd   `cmd:"" help:"Confluence spaces."`
 }
 
-// Context returns a fresh context honoring --timeout and --trace. Caller must
-// call cancel - use defer - to release resources even if no deadline fires.
-// When --trace is set the context carries a JSON-lines tracer that emits
-// events to the CLI's configured stderr writer. The context is stashed on
-// the CLI for reuse by later helpers.
+// Context returns a fresh context honoring --timeout and --trace, and cancels
+// on SIGINT/SIGTERM so long-running commands (e.g. space sync) unwind cleanly
+// instead of dying mid-write. Caller must call cancel - use defer - to release
+// the signal handler and any deadline. When --trace is set the context carries
+// a JSON-lines tracer that emits events to the CLI's configured stderr writer.
+// The context is stashed on the CLI for reuse by later helpers.
 func (c *CLI) Context() (context.Context, context.CancelFunc) {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	if c.Trace {
 		ctx = httpx.WithTracer(ctx, httpx.NewJSONLinesTracer(c.stderr()))
 	}
 	if c.Timeout > 0 {
-		ctx, cancel := context.WithTimeout(ctx, c.Timeout)
-		c.ctx = ctx
-		return ctx, cancel
+		tctx, cancel := context.WithTimeout(ctx, c.Timeout)
+		c.ctx = tctx
+		return tctx, func() { cancel(); stop() }
 	}
 	c.ctx = ctx
-	return ctx, func() {}
+	return ctx, stop
 }
 
 // ParsedFields returns the --fields value split into individual field names.
