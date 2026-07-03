@@ -209,6 +209,53 @@ func TestConvertWithAttachmentRewrite(t *testing.T) {
 	}
 }
 
+func TestConvertWithAttachmentURLResolver(t *testing.T) {
+	resolver := func(name string) (string, bool) {
+		if name == "diagram.png" {
+			return "https://acme.atlassian.net/wiki/download/attachments/123/diagram.png", true
+		}
+		return "", false
+	}
+
+	// Image via the resolver renders an absolute remote URL.
+	img := ConvertWithOptions(
+		`<ac:image><ri:attachment ri:filename="diagram.png"/></ac:image>`,
+		Options{AttachmentURL: resolver},
+	)
+	want := "![diagram.png](https://acme.atlassian.net/wiki/download/attachments/123/diagram.png)\n"
+	if img != want {
+		t.Errorf("image with resolver =\n%q\nwant:\n%q", img, want)
+	}
+
+	// Attachment download link via the resolver also renders the absolute URL.
+	link := ConvertWithOptions(
+		`<p><a href="/wiki/download/attachments/123/diagram.png">See</a></p>`,
+		Options{AttachmentURL: resolver},
+	)
+	wantLink := "[See](https://acme.atlassian.net/wiki/download/attachments/123/diagram.png)\n"
+	if link != wantLink {
+		t.Errorf("link with resolver =\n%q\nwant:\n%q", link, wantLink)
+	}
+
+	// Unknown attachment (!ok) falls back to the bare filename.
+	unknown := ConvertWithOptions(
+		`<ac:image><ri:attachment ri:filename="other.png"/></ac:image>`,
+		Options{AttachmentURL: resolver},
+	)
+	if unknown != "![other.png](other.png)\n" {
+		t.Errorf("unknown image =\n%q\nwant:\n%q", unknown, "![other.png](other.png)\n")
+	}
+
+	// With no resolver, the old local _attachments rewriting is unchanged.
+	old := ConvertWithOptions(
+		`<ac:image><ri:attachment ri:filename="diagram.png"/></ac:image>`,
+		Options{AttachmentPath: "_attachments"},
+	)
+	if old != "![diagram.png](_attachments/diagram.png)\n" {
+		t.Errorf("no-resolver image =\n%q\nwant _attachments path", old)
+	}
+}
+
 func TestConvert_ComplexDocument(t *testing.T) {
 	input := `
 	<h1>Project Overview</h1>

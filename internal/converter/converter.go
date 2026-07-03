@@ -12,6 +12,12 @@ import (
 
 type Options struct {
 	AttachmentPath string
+
+	// AttachmentURL, when non-nil, maps an attachment filename to the URL used in
+	// the rendered Markdown for images and attachment links. When nil, the existing
+	// local `_attachments/<filename>` rewriting is used (sync behavior, unchanged).
+	// When it returns !ok (unknown attachment), the bare filename is used.
+	AttachmentURL func(filename string) (url string, ok bool)
 }
 
 func Convert(storage string) string {
@@ -232,9 +238,17 @@ func (c *converter) handleLink(elem xml.StartElement, decoder *xml.Decoder) {
 	text := c.collectInlineText(decoder, "a")
 
 	// Rewrite attachment URLs
-	if c.opts.AttachmentPath != "" && isAttachmentURL(href) {
+	if isAttachmentURL(href) {
 		filename := path.Base(href)
-		href = c.opts.AttachmentPath + "/" + filename
+		if c.opts.AttachmentURL != nil {
+			if u, ok := c.opts.AttachmentURL(filename); ok {
+				href = u
+			} else {
+				href = filename
+			}
+		} else if c.opts.AttachmentPath != "" {
+			href = c.opts.AttachmentPath + "/" + filename
+		}
 	}
 
 	c.buf.WriteString("[" + text + "](" + href + ")")
@@ -262,8 +276,14 @@ func (c *converter) handleImage(decoder *xml.Decoder) {
 			name := xmlName(t.Name)
 			if name == "ac:image" || depth == 0 {
 				imgPath := filename
-				if c.opts.AttachmentPath != "" && filename != "" {
-					imgPath = c.opts.AttachmentPath + "/" + filename
+				if filename != "" {
+					if c.opts.AttachmentURL != nil {
+						if u, ok := c.opts.AttachmentURL(filename); ok {
+							imgPath = u
+						}
+					} else if c.opts.AttachmentPath != "" {
+						imgPath = c.opts.AttachmentPath + "/" + filename
+					}
 				}
 				if filename != "" {
 					c.buf.WriteString("![" + filename + "](" + imgPath + ")\n")
