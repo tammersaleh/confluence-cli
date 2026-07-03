@@ -311,6 +311,98 @@ func TestSpaceInfo_PerItemNotFound(t *testing.T) {
 	}
 }
 
+// spaceListServer serves /wiki/api/v2/spaces (no key filter). The first page
+// links to a second (cursor=C2) that returns the final result.
+func spaceListServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/spaces" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.URL.Query().Get("cursor") == "C2" {
+			_, _ = w.Write([]byte(`{"results":[{"id":"2","key":"OPS","name":"Ops","type":"global","status":"current","homepageId":"888"}],"_links":{"next":""}}`))
+			return
+		}
+		next := srv.URL + "/wiki/api/v2/spaces?cursor=C2"
+		_, _ = w.Write([]byte(`{"results":[{"id":"1","key":"ENG","name":"Engineering","type":"global","status":"current","homepageId":"999"}],"_links":{"next":"` + next + `"}}`))
+	}))
+	return srv
+}
+
+func TestSpaceList_SinglePage(t *testing.T) {
+	clearCredEnv(t)
+	server := spaceListServer(t)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &SpaceListCmd{Limit: 25}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 row + 1 meta, got %d: %q", len(lines), out.String())
+	}
+	row := lines[0]
+	if row["id"] != "1" || row["key"] != "ENG" || row["name"] != "Engineering" {
+		t.Errorf("row shape unexpected: %v", row)
+	}
+	if row["type"] != "global" || row["status"] != "current" || row["homepage_id"] != "999" {
+		t.Errorf("row missing type/status/homepage_id: %v", row)
+	}
+	meta := lines[1]["_meta"].(map[string]any)
+	if meta["next_cursor"] != "C2" || meta["has_more"] != true {
+		t.Errorf("meta unexpected: %v", meta)
+	}
+}
+
+func TestSpaceList_All(t *testing.T) {
+	clearCredEnv(t)
+	server := spaceListServer(t)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &SpaceListCmd{Limit: 25, All: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 3 {
+		t.Fatalf("expected 2 rows + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["key"] != "ENG" || lines[1]["key"] != "OPS" {
+		t.Errorf("rows unexpected: %v, %v", lines[0], lines[1])
+	}
+	meta := lines[2]["_meta"].(map[string]any)
+	if meta["has_more"] != false {
+		t.Errorf("has_more = %v, want false", meta["has_more"])
+	}
+	if _, ok := meta["next_cursor"]; ok {
+		t.Errorf("next_cursor should be omitted in --all mode: %v", meta)
+	}
+}
+
 func TestSpaceInfo_MixedSiteURLs(t *testing.T) {
 	clearCredEnv(t)
 	var out, errBuf bytes.Buffer

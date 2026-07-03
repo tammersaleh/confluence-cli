@@ -15,6 +15,63 @@ import (
 type SpaceCmd struct {
 	Sync SpaceSyncCmd `cmd:"" help:"Sync a Confluence space to local Markdown files."`
 	Info SpaceInfoCmd `cmd:"" help:"Show space details."`
+	List SpaceListCmd `cmd:"" help:"List spaces."`
+}
+
+type SpaceListCmd struct {
+	Limit  int    `default:"25" help:"Page size requested from the API."`
+	Cursor string `help:"Opaque pagination cursor from a prior _meta.next_cursor."`
+	All    bool   `help:"Fetch every page (loop until the cursor is exhausted)."`
+}
+
+func (c *SpaceListCmd) Run(cli *CLI) error {
+	// Space listing is site-wide: the site comes from --site or the single
+	// stored default (no URL arg to derive it from).
+	client, _, err := cli.NewClientForSite("")
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	p := cli.NewPrinter()
+	cursor := c.Cursor
+	var next string
+	for {
+		spaces, n, err := client.ListSpaces(ctx, cursor, c.Limit)
+		if err != nil {
+			return cli.ClassifyError(err)
+		}
+		next = n
+
+		for _, s := range spaces {
+			row := map[string]any{
+				"id":          s.ID,
+				"key":         s.Key,
+				"name":        s.Name,
+				"type":        s.Type,
+				"status":      s.Status,
+				"homepage_id": s.HomepageID,
+			}
+			if err := p.PrintItem(row); err != nil {
+				return err
+			}
+		}
+
+		if !c.All {
+			break
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+
+	if c.All {
+		return p.PrintMeta(output.Meta{})
+	}
+	return p.PrintMeta(output.Meta{HasMore: next != "", NextCursor: next})
 }
 
 type SpaceSyncCmd struct {

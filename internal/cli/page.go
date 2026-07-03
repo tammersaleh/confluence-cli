@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/tammersaleh/confluence-sync/internal/confluence"
@@ -11,8 +12,45 @@ import (
 )
 
 type PageCmd struct {
-	List PageListCmd `cmd:"" help:"List pages in a space."`
-	Get  PageGetCmd  `cmd:"" help:"Get one or more pages."`
+	List      PageListCmd      `cmd:"" help:"List pages in a space."`
+	Get       PageGetCmd       `cmd:"" help:"Get one or more pages."`
+	Children  PageChildrenCmd  `cmd:"" help:"List a page's direct children."`
+	Ancestors PageAncestorsCmd `cmd:"" help:"List a page's ancestors (root-most first)."`
+	Tree      PageTreeCmd      `cmd:"" help:"Print a space's page hierarchy (ordered by ID, not display order)."`
+}
+
+// resolvePageRef derives the site hint and page id from a single ref, which is
+// either a bare page id or a Confluence page URL. A non-page URL is invalid.
+func resolvePageRef(cli *CLI, ref string) (siteHint, pageID string, err error) {
+	r, matched, perr := confluenceurl.Parse(ref)
+	if matched && perr != nil {
+		return "", "", &output.Error{
+			Err:    "invalid_input",
+			Detail: perr.Error(),
+			Hint:   "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123).",
+			Input:  ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+	if !matched {
+		// Bare id: no site info.
+		return "", ref, nil
+	}
+	if r.Kind != confluenceurl.KindPage || r.PageID == "" {
+		return "", "", &output.Error{
+			Err:    "invalid_input",
+			Detail: "URL does not identify a page",
+			Hint:   "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123).",
+			Input:  ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+	if cli.Site != "" {
+		if err := requireSiteMatch(cli.Site, ref); err != nil {
+			return "", "", err
+		}
+	}
+	return r.BaseURL, r.PageID, nil
 }
 
 type PageListCmd struct {
@@ -121,6 +159,185 @@ func (c *PageListCmd) resolveSpace(cli *CLI) (siteHint, spaceKey string, err err
 	}
 
 	return ref.BaseURL, ref.SpaceKey, nil
+}
+
+type PageChildrenCmd struct {
+	Ref    string `arg:"" name:"id-or-url" help:"Page ID or URL."`
+	Limit  int    `default:"25" help:"Page size requested from the API."`
+	Cursor string `help:"Opaque pagination cursor from a prior _meta.next_cursor."`
+	All    bool   `help:"Fetch every page (loop until the cursor is exhausted)."`
+}
+
+func (c *PageChildrenCmd) Run(cli *CLI) error {
+	siteHint, pageID, err := resolvePageRef(cli, c.Ref)
+	if err != nil {
+		return err
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	p := cli.NewPrinter()
+	cursor := c.Cursor
+	var next string
+	for {
+		children, n, err := client.ListChildren(ctx, pageID, cursor, c.Limit)
+		if err != nil {
+			return cli.ClassifyError(err)
+		}
+		next = n
+
+		for _, pg := range children {
+			row := map[string]any{
+				"id":    pg.ID,
+				"title": pg.Title,
+				"type":  pg.Type,
+			}
+			if err := p.PrintItem(row); err != nil {
+				return err
+			}
+		}
+
+		if !c.All {
+			break
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+
+	if c.All {
+		return p.PrintMeta(output.Meta{})
+	}
+	return p.PrintMeta(output.Meta{HasMore: next != "", NextCursor: next})
+}
+
+type PageAncestorsCmd struct {
+	Ref string `arg:"" name:"id-or-url" help:"Page ID or URL."`
+}
+
+func (c *PageAncestorsCmd) Run(cli *CLI) error {
+	siteHint, pageID, err := resolvePageRef(cli, c.Ref)
+	if err != nil {
+		return err
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	ancestors, err := client.GetAncestors(ctx, pageID)
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+
+	p := cli.NewPrinter()
+	// The ancestors endpoint returns limited fields (id, type); title is often
+	// absent, so it's omitted here. Order is as returned (root-most first).
+	for _, a := range ancestors {
+		row := map[string]any{
+			"id":   a.ID,
+			"type": a.Type,
+		}
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+	}
+	return p.PrintMeta(output.Meta{})
+}
+
+type PageTreeCmd struct {
+	Space string `required:"" help:"Space key or URL."`
+}
+
+func (c *PageTreeCmd) Run(cli *CLI) error {
+	siteHint, spaceKey, err := (&PageListCmd{Space: c.Space}).resolveSpace(cli)
+	if err != nil {
+		return err
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	space, err := client.GetSpace(ctx, spaceKey)
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+
+	pages, err := client.GetPages(ctx, space.ID)
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+
+	// Build the tree in the command (no dependency on internal/sync). Ordering
+	// is by ID (deterministic), not Confluence display order, which the v2 API
+	// doesn't expose in the crawl.
+	idSet := make(map[string]bool, len(pages))
+	childrenByParent := make(map[string][]confluence.Page, len(pages))
+	for _, pg := range pages {
+		idSet[pg.ID] = true
+	}
+	var roots []confluence.Page
+	for _, pg := range pages {
+		if pg.ParentID == "" || !idSet[pg.ParentID] {
+			roots = append(roots, pg)
+			continue
+		}
+		childrenByParent[pg.ParentID] = append(childrenByParent[pg.ParentID], pg)
+	}
+	sortByID := func(ps []confluence.Page) {
+		sort.Slice(ps, func(i, j int) bool { return ps[i].ID < ps[j].ID })
+	}
+	sortByID(roots)
+	for k := range childrenByParent {
+		sortByID(childrenByParent[k])
+	}
+
+	p := cli.NewPrinter()
+
+	var walk func(pg confluence.Page, depth int) error
+	walk = func(pg confluence.Page, depth int) error {
+		row := map[string]any{
+			"id":    pg.ID,
+			"title": pg.Title,
+			"type":  pg.Type,
+			"depth": depth,
+		}
+		if pg.ParentID != "" {
+			row["parent_id"] = pg.ParentID
+		}
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+		for _, child := range childrenByParent[pg.ID] {
+			if err := walk(child, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, root := range roots {
+		if err := walk(root, 0); err != nil {
+			return err
+		}
+	}
+	return p.PrintMeta(output.Meta{})
 }
 
 type PageGetCmd struct {
