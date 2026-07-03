@@ -29,9 +29,9 @@ go.work.sum
 # env file
 .env
 
-# Sync output directories
-output/
-sa/
+# Sync output directories (repo root only; don't swallow internal/output)
+/output/
+/sa/
 
 # Editor/IDE
 # .idea/
