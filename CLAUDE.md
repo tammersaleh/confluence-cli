@@ -8,10 +8,11 @@ Kong. Auth is an API token + email over HTTP Basic.
 `SPEC.md` is the source of truth for the full command surface and output
 contract. The `version`, `space sync`, `space info`, `space list`, `auth`,
 `page list`, `page get`, `page children`, `page ancestors`, `page tree`,
-`attachment list`, and `attachment download` commands ship today; the rest is
-designed but not implemented. See `README.md`
-for user-facing usage and `skills/confluence-cli/SKILL.md` for the agent-facing
-skill.
+`attachment list`, `attachment download`, `search`, `comment list`,
+`label list`, `user current`, and `user info` commands ship today; the rest
+(attachment upload and the writes) is designed but not implemented. See
+`README.md` for user-facing usage and `skills/confluence-cli/SKILL.md` for the
+agent-facing skill.
 
 ## Architecture
 
@@ -25,6 +26,10 @@ internal/
     auth.go                    `auth login|status|logout` commands.
     page.go                    `page list`, `page get`, `page children`, `page ancestors`, `page tree` commands. Derives site/space from --space or URL args; --body-format incl. derived markdown. `page tree` builds the hierarchy in-command, sorted by ID (not display order).
     attachment.go              `attachment list` and `attachment download` commands.
+    search.go                  `search <cql>` command. CQL positional, site-wide, paginated (--limit/--cursor/--all).
+    comment.go                 `comment list` command. Drains footer + inline; --footer/--inline narrow.
+    label.go                   `label list` command. Fully drained.
+    user.go                    `user current` and `user info <accountId>...` commands.
   output/
     output.go                  Printer (JSONL rows + _meta trailer), Meta, Error, ExitError, exit codes, field filtering.
     errors.go                  Error.AsItem for inline per-item errors.
@@ -109,7 +114,7 @@ old Cobra tool's `1 = config / 2 = auth / 3 = api / 4 = filesystem` codes
 
 ## Commands
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `attachment list`, and `attachment download` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `attachment list`, `attachment download`, `search`, `comment list`, `label list`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
 
 - `confluence version` - emits the build version, then the trailer.
 - `confluence space sync <space-url> <output-dir>` - one-way space crawl to local Markdown. Flags: `--prune`, `--dry-run`, `--quiet`, `--timeout`, `--trace`. Progress goes to stderr; stdout carries a single summary object then the trailer.
@@ -125,10 +130,15 @@ The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `p
 - `confluence page tree --space <key|url>` - space page hierarchy in DFS order. Rows carry `id`, `title`, `type`, `depth`, and `parent_id` when present. Siblings sorted by ID (deterministic, not Confluence display order).
 - `confluence attachment list <page id|url>` - list a page's attachments. Rows carry `id`, `title`, `media_type`, `download_url` (absolute), `page_id`.
 - `confluence attachment download <id> [-o|--out <path>]` - download an attachment by id (not a URL) to a file; defaults to the attachment filename in the current dir. Emits `id`, `title`, `media_type`, `path`, `bytes`.
+- `confluence search <cql>` - CQL search. The CQL is the positional arg; site-wide (from `--site` or the single stored default). Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `space_key`, `excerpt`, `url`.
+- `confluence comment list <page id|url>` - a page's comments. Drains footer + inline (no cursor); `--footer`/`--inline` narrow to one kind. Rows carry `id`, `kind` (`footer`/`inline`), `body`, `author_id`, `created_at`, `web_url`. A missing page is a fatal `page_not_found`.
+- `confluence label list <page id|url>` - a page's labels, fully drained. Rows carry `id`, `name`, `prefix`.
+- `confluence user current` - the authenticated user. A single row with `account_id`, `display_name`, `email`.
+- `confluence user info <accountId>...` - look up users by account id. Rows echo `input` and carry `account_id`, `display_name`, `email`. Unknown ids go inline as `user_not_found` and bump `_meta.error_count`.
 
-The rest of the surface (`attachment upload`, `search`, `comment`, `label`,
-`user`, and the write commands) is designed but not yet implemented. See
-`SPEC.md`.
+The rest of the surface (`attachment upload` and the write commands:
+`page create|update|delete`, `comment add`, `label add|remove`) is designed but
+not yet implemented. See `SPEC.md`.
 
 ### Global flags
 

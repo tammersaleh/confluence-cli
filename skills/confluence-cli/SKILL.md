@@ -1,6 +1,6 @@
 ---
 name: confluence-cli
-description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), inspect spaces (space info/list), and read/download attachments, with the wider read/write surface arriving in later releases"
+description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), inspect spaces (space info/list), read/download attachments, CQL search, list comments and labels, and look up users, with the write surface arriving in later releases"
 argument-hint: ""
 allowed-tools:
   - Bash(confluence *)
@@ -13,8 +13,9 @@ command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 
 Today the `version`, `space sync`, `space info`, `space list`, `auth`,
 `page list`, `page get`, `page children`, `page ancestors`, `page tree`,
-`attachment list`, and `attachment download` commands ship. The wider read/write
-surface below is planned but not yet implemented - do not invoke it.
+`attachment list`, `attachment download`, `search`, `comment list`,
+`label list`, `user current`, and `user info` commands ship. The write surface
+below is planned but not yet implemented - do not invoke it.
 
 ## Prerequisites
 
@@ -252,14 +253,89 @@ confluence attachment download att987 --out ./diagram.png
 {"_meta":{"has_more":false}}
 ```
 
+### search
+
+CQL search. The positional is the CQL query. Site-wide (from `--site` or the
+single stored default). Page with `--limit`/`--cursor`, or drain with `--all`.
+Rows carry `id`, `title`, `type`, `space_key`, `excerpt`, `url`.
+
+```bash
+confluence search 'type = page AND text ~ "runbook"'
+confluence search 'label = on-call' --all
+```
+
+```jsonl
+{"id":"123456","title":"Incident Runbook","type":"page","space_key":"ENG","excerpt":"steps to follow during an incident","url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### comment list
+
+A page's comments (numeric id or page URL). Footer and inline are fully drained,
+so there is no cursor. `--footer`/`--inline` narrow to one kind. Rows carry `id`,
+`kind` (`footer`/`inline`), `body`, `author_id`, `created_at`, `web_url`. A
+missing page is a fatal `page_not_found`.
+
+```bash
+confluence comment list 123456
+confluence comment list 123456 --inline
+```
+
+```jsonl
+{"id":"c1","kind":"footer","body":"<p>Looks good to me.</p>","author_id":"a1","created_at":"2024-06-20T14:45:00.000Z","created_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c1"}
+{"_meta":{"has_more":false}}
+```
+
+### label list
+
+A page's labels (numeric id or page URL). Fully drained, so there is no cursor.
+Rows carry `id`, `name`, `prefix`.
+
+```bash
+confluence label list 123456
+```
+
+```jsonl
+{"id":"l1","name":"runbook","prefix":"global"}
+{"_meta":{"has_more":false}}
+```
+
+### user current
+
+The authenticated user. A single row with `account_id`, `display_name`, `email`.
+
+```bash
+confluence user current
+```
+
+```jsonl
+{"account_id":"a1","display_name":"Ada Lovelace","email":"ada@acme.com"}
+{"_meta":{"has_more":false}}
+```
+
+### user info
+
+Look up users by account id. Each row echoes its `input` and carries
+`account_id`, `display_name`, `email`. Unknown ids appear inline on stdout and
+bump `_meta.error_count`.
+
+```bash
+confluence user info a1
+confluence user info a1 a2 a3
+```
+
+```jsonl
+{"input":"a1","account_id":"a1","display_name":"Ada Lovelace","email":"ada@acme.com"}
+{"input":"a2","error":"user_not_found","detail":"No user with account id 'a2'","hint":"confluence user current"}
+{"_meta":{"has_more":false,"error_count":1}}
+```
+
 ## Planned (not yet available)
 
 Designed but not implemented. Do not run these yet:
 
 - `confluence attachment upload` - upload files to a page.
-- `confluence search <cql>` - CQL search.
-- `confluence comment list|add` - footer and inline comments.
-- `confluence label list|add|remove` - labels.
-- `confluence user current|info` - user lookup.
+- `confluence comment add` - add a footer or inline comment.
+- `confluence label add|remove` - add or remove labels.
 - `confluence page create|update|delete` - authoring (Markdown-in, with
   optimistic concurrency on update).

@@ -6,10 +6,11 @@ commands are non-interactive and scriptable, built for LLM agents and CI.
 
 The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`,
 `page get`, `page children`, `page ancestors`, `page tree`, `attachment list`,
-and `attachment download` commands ship today. A wider read/write surface
-(attachment upload, search, comments, labels, users, and authoring) is designed
-but not yet implemented. See `SPEC.md` for the full contract and planned
-commands, and `skills/confluence-cli/SKILL.md` for the agent skill.
+`attachment download`, `search`, `comment list`, `label list`, `user current`,
+and `user info` commands ship today. The remaining surface (attachment upload
+and authoring: page create/update/delete, comment add, label add/remove) is
+designed but not yet implemented. See `SPEC.md` for the full contract and
+planned commands, and `skills/confluence-cli/SKILL.md` for the agent skill.
 
 ## Installation
 
@@ -263,6 +264,85 @@ confluence attachment download att987 --out ./diagram.png
 ```jsonl
 {"id":"att987","title":"diagram.png","media_type":"image/png","path":"./diagram.png","bytes":48213}
 {"_meta":{"has_more":false}}
+```
+
+### search
+
+CQL search. The positional argument is the CQL query. Site-wide: the site comes
+from `--site` or the single stored default. Page with `--limit`/`--cursor`, or
+drain with `--all`. Rows carry `id`, `title`, `type`, `space_key`, `excerpt`, and
+`url`.
+
+```bash
+confluence search 'type = page AND text ~ "runbook"'
+confluence search 'label = on-call' --all
+```
+
+```jsonl
+{"id":"123456","title":"Incident Runbook","type":"page","space_key":"ENG","excerpt":"steps to follow during an incident","url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### comment list
+
+List a page's comments (numeric id or page URL). Footer and inline comments are
+fully drained, so there is no cursor. `--footer` and `--inline` narrow to one
+kind; without either, both are emitted. Rows carry `id`, `kind`
+(`footer`/`inline`), `body`, `author_id`, `created_at`, and `web_url`. A missing
+page is a fatal `page_not_found`.
+
+```bash
+confluence comment list 123456
+confluence comment list 123456 --inline
+```
+
+```jsonl
+{"id":"c1","kind":"footer","body":"<p>Looks good to me.</p>","author_id":"a1","created_at":"2024-06-20T14:45:00.000Z","created_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c1"}
+{"_meta":{"has_more":false}}
+```
+
+### label list
+
+List a page's labels (numeric id or page URL). Fully drained, so there is no
+cursor. Rows carry `id`, `name`, and `prefix`.
+
+```bash
+confluence label list 123456
+```
+
+```jsonl
+{"id":"l1","name":"runbook","prefix":"global"}
+{"_meta":{"has_more":false}}
+```
+
+### user current
+
+The authenticated user. Emits a single row with `account_id`, `display_name`,
+and `email`.
+
+```bash
+confluence user current
+```
+
+```jsonl
+{"account_id":"a1","display_name":"Ada Lovelace","email":"ada@acme.com"}
+{"_meta":{"has_more":false}}
+```
+
+### user info
+
+Look up one or more users by account id. Each row echoes its `input` and carries
+`account_id`, `display_name`, and `email`. Unknown account ids appear inline on
+stdout and bump `_meta.error_count`.
+
+```bash
+confluence user info a1
+confluence user info a1 a2 a3
+```
+
+```jsonl
+{"input":"a1","account_id":"a1","display_name":"Ada Lovelace","email":"ada@acme.com"}
+{"_meta":{"has_more":false,"error_count":0}}
 ```
 
 ## Sync behavior

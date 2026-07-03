@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `attachment list`, and `attachment download` commands ship today (see "Commands available now"); everything under "Planned commands" is designed but not yet implemented.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `attachment list`, `attachment download`, `search`, `comment list`, `label list`, `user current`, and `user info` commands ship today (see "Commands available now"); everything under "Planned commands" is designed but not yet implemented.
 
 ## Design principles
 
@@ -91,7 +91,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `attachment list`, and `attachment download` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `attachment list`, `attachment download`, `search`, `comment list`, `label list`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### version
 
@@ -337,21 +337,95 @@ $ confluence attachment download att987 -o ./diagram.png
 {"_meta":{"has_more":false}}
 ```
 
+### search
+
+```text
+confluence search <cql> [--limit <n>] [--cursor <c>] [--all]
+```
+
+CQL search. The positional argument is the CQL query. This is site-wide: the site comes from `--site` or the single stored default, since there is no URL argument to derive it from. One object per result, then the trailer.
+
+- `--limit` - page size requested from the API (default 25).
+- `--cursor` - opaque cursor from a prior `_meta.next_cursor`, to fetch the next page.
+- `--all` - loop until the cursor is exhausted, emitting every result. The trailer omits `next_cursor` since nothing remains.
+
+Each row carries `id`, `title`, `type`, `space_key`, `excerpt`, and `url`.
+
+```jsonl
+$ confluence search 'type = page AND text ~ "runbook"'
+{"id":"123456","title":"Incident Runbook","type":"page","space_key":"ENG","excerpt":"steps to follow during an incident","url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"id":"123457","title":"On-call Runbook","type":"page","space_key":"OPS","excerpt":"paging and escalation runbook","url":"https://acme.atlassian.net/wiki/spaces/OPS/pages/123457"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### comment list
+
+```text
+confluence comment list <page id|url> [--footer] [--inline]
+```
+
+List a page's comments. The argument is a numeric page id or a page URL. Footer and inline comments are fully drained, so there is no cursor and the trailer never carries `next_cursor`. `--footer` and `--inline` narrow the output to one kind; without either, both are emitted. A missing page is a fatal `page_not_found`.
+
+Each row carries `id`, `kind` (`footer` or `inline`), `body`, `author_id`, `created_at`, and `web_url`.
+
+```jsonl
+$ confluence comment list 123456
+{"id":"c1","kind":"footer","body":"<p>Looks good to me.</p>","author_id":"a1","created_at":"2024-06-20T14:45:00.000Z","created_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c1"}
+{"id":"c2","kind":"inline","body":"<p>Clarify this section.</p>","author_id":"a2","created_at":"2024-06-21T09:00:00.000Z","created_at_iso":"2024-06-21T09:00:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c2"}
+{"_meta":{"has_more":false}}
+```
+
+### label list
+
+```text
+confluence label list <page id|url>
+```
+
+List a page's labels. The argument is a numeric page id or a page URL. Labels are fully drained, so there is no cursor. Each row carries `id`, `name`, and `prefix`.
+
+```jsonl
+$ confluence label list 123456
+{"id":"l1","name":"runbook","prefix":"global"}
+{"id":"l2","name":"on-call","prefix":"global"}
+{"_meta":{"has_more":false}}
+```
+
+### user current
+
+```text
+confluence user current
+```
+
+The authenticated user. Emits a single row with `account_id`, `display_name`, and `email`, then the trailer.
+
+```jsonl
+$ confluence user current
+{"account_id":"a1","display_name":"Ada Lovelace","email":"ada@acme.com"}
+{"_meta":{"has_more":false}}
+```
+
+### user info
+
+```text
+confluence user info <accountId>...
+```
+
+Look up one or more users by account id. Each row echoes the `input` that produced it and carries `account_id`, `display_name`, and `email`. Unknown account ids produce an inline `user_not_found` on stdout and bump `_meta.error_count`.
+
+```jsonl
+$ confluence user info a1 nope
+{"input":"a1","account_id":"a1","display_name":"Ada Lovelace","email":"ada@acme.com"}
+{"input":"nope","error":"user_not_found","detail":"No user with account id 'nope'","hint":"confluence user current"}
+{"_meta":{"has_more":false,"error_count":1}}
+```
+
 ## Planned commands (not yet implemented)
 
-Everything below is designed but not built. Do not invoke these yet; they are documented so the surface is settled before implementation. They land across phases (`page` first, then attachments/space, then the wider read surface, then writes).
+Everything below is designed but not built. Do not invoke these yet; they are documented so the surface is settled before implementation. Only the writes remain: authoring pages, comments, labels, and attachment uploads.
 
 ### Attachment
 
 - `confluence attachment upload <page> <file>...` - upload files to a page. Not yet available.
-
-### Search, comments, labels, users (read)
-
-- `confluence search <cql>` - CQL search, with a `--text` convenience later. Not yet available.
-- `confluence comment list <page>` - footer and inline comments. Not yet available.
-- `confluence label list <page>` - labels on a page. Not yet available.
-- `confluence user current` - the authenticated user. Not yet available.
-- `confluence user info <accountId>...` - look up users by account id. Not yet available.
 
 ### Writes
 
