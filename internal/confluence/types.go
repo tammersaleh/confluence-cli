@@ -133,6 +133,48 @@ type PageDetail struct {
 	BodyFormat APIBodyFormat
 }
 
+// WriteBody is the body payload for a create/update. Representation is one of
+// BodyFormatStorage or BodyFormatAtlasDoc; Value is the raw content in that
+// representation.
+type WriteBody struct {
+	Representation APIBodyFormat
+	Value          string
+}
+
+// PageRecord is the server's response to a create/update page call. It carries
+// the identifying and version fields returned, not the full body.
+type PageRecord struct {
+	ID        string
+	Title     string
+	SpaceID   string
+	ParentID  string
+	Version   int
+	AuthorID  string
+	CreatedAt string
+	WebURL    string
+}
+
+// CreatePageParams are the inputs to CreatePage. Status defaults to "current"
+// when empty. Body is optional (nil creates an empty page).
+type CreatePageParams struct {
+	SpaceID  string
+	Title    string
+	ParentID string
+	Status   string
+	Body     *WriteBody
+}
+
+// UpdatePageParams are the inputs to UpdatePage. Version is the NEW version
+// number to send (the caller computes it, typically current+1). Status defaults
+// to "current" when empty.
+type UpdatePageParams struct {
+	ID      string
+	Title   string
+	Status  string
+	Version int
+	Body    WriteBody
+}
+
 type Client interface {
 	GetCurrentUser(ctx context.Context) (*CurrentUser, error)
 	GetUser(ctx context.Context, accountID string) (*CurrentUser, error)
@@ -153,4 +195,11 @@ type Client interface {
 	GetAttachmentByID(ctx context.Context, attachmentID string) (*Attachment, error)
 	DownloadAttachment(ctx context.Context, attachment Attachment) (io.ReadCloser, error)
 	GetContentParent(ctx context.Context, id string, contentType string) (*Page, error)
+	CreatePage(ctx context.Context, p CreatePageParams) (*PageRecord, error)
+	UpdatePage(ctx context.Context, p UpdatePageParams) (*PageRecord, error)
+	DeletePage(ctx context.Context, pageID string) error
+	AddFooterComment(ctx context.Context, pageID string, body WriteBody) (*Comment, error)
+	AddLabel(ctx context.Context, pageID, label string) (*Label, error)
+	RemoveLabel(ctx context.Context, pageID, label string) error
+	UploadAttachment(ctx context.Context, pageID, filePath string) (*Attachment, error)
 }

@@ -113,6 +113,34 @@ func (m *mockClient) GetLabels(ctx context.Context, pageID, cursor string, limit
 	return nil, "", nil
 }
 
+func (m *mockClient) CreatePage(ctx context.Context, p confluence.CreatePageParams) (*confluence.PageRecord, error) {
+	return nil, nil
+}
+
+func (m *mockClient) UpdatePage(ctx context.Context, p confluence.UpdatePageParams) (*confluence.PageRecord, error) {
+	return nil, nil
+}
+
+func (m *mockClient) DeletePage(ctx context.Context, pageID string) error {
+	return nil
+}
+
+func (m *mockClient) AddFooterComment(ctx context.Context, pageID string, body confluence.WriteBody) (*confluence.Comment, error) {
+	return nil, nil
+}
+
+func (m *mockClient) AddLabel(ctx context.Context, pageID, label string) (*confluence.Label, error) {
+	return nil, nil
+}
+
+func (m *mockClient) RemoveLabel(ctx context.Context, pageID, label string) error {
+	return nil
+}
+
+func (m *mockClient) UploadAttachment(ctx context.Context, pageID, filePath string) (*confluence.Attachment, error) {
+	return nil, nil
+}
+
 func TestSync_SingleLeafPage(t *testing.T) {
 	client := &mockClient{
 		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},

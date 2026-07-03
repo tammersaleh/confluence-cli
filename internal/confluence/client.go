@@ -12,6 +12,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -1353,4 +1355,293 @@ func (c *client) DownloadAttachment(ctx context.Context, attachment Attachment) 
 	}
 
 	return nil, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
+}
+
+// absWebURL absolutizes a Confluence _links.webui value against the client's
+// baseURL, prepending /wiki when missing. Empty and already-absolute values are
+// returned unchanged.
+func (c *client) absWebURL(webURL string) string {
+	if webURL == "" || strings.HasPrefix(webURL, "http") {
+		return webURL
+	}
+	if !strings.HasPrefix(webURL, "/wiki") {
+		webURL = "/wiki" + webURL
+	}
+	return c.baseURL + webURL
+}
+
+// pageRecordResponse is the create/update page response shape.
+type pageRecordResponse struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	SpaceID   string `json:"spaceId"`
+	ParentID  string `json:"parentId"`
+	AuthorID  string `json:"authorId"`
+	CreatedAt string `json:"createdAt"`
+	Version   struct {
+		Number int `json:"number"`
+	} `json:"version"`
+	Links struct {
+		WebUI string `json:"webui"`
+	} `json:"_links"`
+}
+
+func (r pageRecordResponse) toRecord(c *client) *PageRecord {
+	return &PageRecord{
+		ID:        r.ID,
+		Title:     r.Title,
+		SpaceID:   r.SpaceID,
+		ParentID:  r.ParentID,
+		Version:   r.Version.Number,
+		AuthorID:  r.AuthorID,
+		CreatedAt: r.CreatedAt,
+		WebURL:    c.absWebURL(r.Links.WebUI),
+	}
+}
+
+// bodyPayload is the {"representation","value"} JSON object for a write body.
+type bodyPayload struct {
+	Representation string `json:"representation"`
+	Value          string `json:"value"`
+}
+
+func (c *client) CreatePage(ctx context.Context, p CreatePageParams) (*PageRecord, error) {
+	status := p.Status
+	if status == "" {
+		status = "current"
+	}
+
+	payload := map[string]any{
+		"spaceId": p.SpaceID,
+		"status":  status,
+		"title":   p.Title,
+	}
+	if p.ParentID != "" {
+		payload["parentId"] = p.ParentID
+	}
+	if p.Body != nil {
+		payload["body"] = bodyPayload{
+			Representation: string(p.Body.Representation),
+			Value:          p.Body.Value,
+		}
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPost, "/wiki/api/v2/pages", nil, payload)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result pageRecordResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return result.toRecord(c), nil
+}
+
+func (c *client) UpdatePage(ctx context.Context, p UpdatePageParams) (*PageRecord, error) {
+	status := p.Status
+	if status == "" {
+		status = "current"
+	}
+
+	payload := map[string]any{
+		"id":     p.ID,
+		"status": status,
+		"title":  p.Title,
+		"version": map[string]any{
+			"number": p.Version,
+		},
+		"body": bodyPayload{
+			Representation: string(p.Body.Representation),
+			Value:          p.Body.Value,
+		},
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPut, fmt.Sprintf("/wiki/api/v2/pages/%s", p.ID), nil, payload)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrPageNotFound
+		}
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result pageRecordResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return result.toRecord(c), nil
+}
+
+func (c *client) DeletePage(ctx context.Context, pageID string) error {
+	resp, err := c.doRequest(ctx, http.MethodDelete, fmt.Sprintf("/wiki/api/v2/pages/%s", pageID), nil)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrPageNotFound
+		}
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+func (c *client) AddFooterComment(ctx context.Context, pageID string, body WriteBody) (*Comment, error) {
+	payload := map[string]any{
+		"pageId": pageID,
+		"body": bodyPayload{
+			Representation: string(body.Representation),
+			Value:          body.Value,
+		},
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPost, "/wiki/api/v2/footer-comments", nil, payload)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrPageNotFound
+		}
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		ID   string `json:"id"`
+		Body struct {
+			Storage struct {
+				Value string `json:"value"`
+			} `json:"storage"`
+		} `json:"body"`
+		Links struct {
+			WebUI string `json:"webui"`
+		} `json:"_links"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return &Comment{
+		ID:     result.ID,
+		Kind:   "footer",
+		Body:   result.Body.Storage.Value,
+		WebURL: c.absWebURL(result.Links.WebUI),
+	}, nil
+}
+
+func (c *client) AddLabel(ctx context.Context, pageID, label string) (*Label, error) {
+	payload := []map[string]string{
+		{"prefix": "global", "name": label},
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPost, fmt.Sprintf("/wiki/rest/api/content/%s/label", pageID), nil, payload)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrPageNotFound
+		}
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		Results []struct {
+			ID     string `json:"id"`
+			Name   string `json:"name"`
+			Prefix string `json:"prefix"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	if len(result.Results) == 0 {
+		return nil, fmt.Errorf("%w: label add returned no results", ErrAPIError)
+	}
+
+	// Prefer the result matching the requested label; fall back to the first.
+	chosen := result.Results[0]
+	for _, r := range result.Results {
+		if r.Name == label {
+			chosen = r
+			break
+		}
+	}
+	return &Label{
+		ID:     chosen.ID,
+		Name:   chosen.Name,
+		Prefix: chosen.Prefix,
+	}, nil
+}
+
+func (c *client) RemoveLabel(ctx context.Context, pageID, label string) error {
+	query := url.Values{}
+	query.Set("name", label)
+
+	resp, err := c.doRequest(ctx, http.MethodDelete, fmt.Sprintf("/wiki/rest/api/content/%s/label", pageID), query)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrPageNotFound
+		}
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+func (c *client) UploadAttachment(ctx context.Context, pageID, filePath string) (*Attachment, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	path := fmt.Sprintf("/wiki/rest/api/content/%s/child/attachment", pageID)
+	resp, err := c.doMultipart(ctx, http.MethodPut, path, nil, func(mw *multipart.Writer) error {
+		fw, err := mw.CreateFormFile("file", filepath.Base(filePath))
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(fw, f); err != nil {
+			return err
+		}
+		return mw.WriteField("minorEdit", "true")
+	})
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrPageNotFound
+		}
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		Results []struct {
+			ID         string `json:"id"`
+			Title      string `json:"title"`
+			Extensions struct {
+				MediaType string `json:"mediaType"`
+			} `json:"extensions"`
+			Metadata struct {
+				MediaType string `json:"mediaType"`
+			} `json:"metadata"`
+			Links struct {
+				Download string `json:"download"`
+			} `json:"_links"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	if len(result.Results) == 0 {
+		return nil, fmt.Errorf("%w: attachment upload returned no results", ErrAPIError)
+	}
+
+	r := result.Results[0]
+	mediaType := r.Extensions.MediaType
+	if mediaType == "" {
+		mediaType = r.Metadata.MediaType
+	}
+	return &Attachment{
+		ID:          r.ID,
+		Title:       r.Title,
+		MediaType:   mediaType,
+		DownloadURL: r.Links.Download,
+	}, nil
 }

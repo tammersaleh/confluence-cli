@@ -9,6 +9,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1946,6 +1948,567 @@ func TestClient_StatusError_Message(t *testing.T) {
 	}
 	if !strings.Contains(se.Error(), "bad body") {
 		t.Errorf("Error() = %q, want to contain 'bad body'", se.Error())
+	}
+}
+
+func TestClient_CreatePage(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotBody   map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"id": "123",
+			"title": "New Page",
+			"spaceId": "space1",
+			"parentId": "99",
+			"authorId": "user1",
+			"createdAt": "2024-01-15T10:30:00.000Z",
+			"version": {"number": 1},
+			"_links": {"webui": "/spaces/ENG/pages/123/New+Page"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	rec, err := c.CreatePage(context.Background(), CreatePageParams{
+		SpaceID:  "space1",
+		Title:    "New Page",
+		ParentID: "99",
+		Body:     &WriteBody{Representation: BodyFormatStorage, Value: "<p>Hi</p>"},
+	})
+	if err != nil {
+		t.Fatalf("CreatePage() error: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/wiki/api/v2/pages" {
+		t.Errorf("path = %q, want /wiki/api/v2/pages", gotPath)
+	}
+	if gotBody["spaceId"] != "space1" {
+		t.Errorf("spaceId = %v, want space1", gotBody["spaceId"])
+	}
+	if gotBody["status"] != "current" {
+		t.Errorf("status = %v, want current (default)", gotBody["status"])
+	}
+	if gotBody["title"] != "New Page" {
+		t.Errorf("title = %v, want New Page", gotBody["title"])
+	}
+	if gotBody["parentId"] != "99" {
+		t.Errorf("parentId = %v, want 99", gotBody["parentId"])
+	}
+	body, ok := gotBody["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("body = %v, want object", gotBody["body"])
+	}
+	if body["representation"] != "storage" || body["value"] != "<p>Hi</p>" {
+		t.Errorf("body = %v, want representation=storage value=<p>Hi</p>", body)
+	}
+
+	if rec.ID != "123" || rec.Title != "New Page" || rec.SpaceID != "space1" || rec.ParentID != "99" {
+		t.Errorf("record = %+v, want ID=123 Title=New Page SpaceID=space1 ParentID=99", rec)
+	}
+	if rec.Version != 1 {
+		t.Errorf("Version = %d, want 1", rec.Version)
+	}
+	if rec.AuthorID != "user1" {
+		t.Errorf("AuthorID = %q, want user1", rec.AuthorID)
+	}
+	wantURL := server.URL + "/wiki/spaces/ENG/pages/123/New+Page"
+	if rec.WebURL != wantURL {
+		t.Errorf("WebURL = %q, want %q", rec.WebURL, wantURL)
+	}
+}
+
+func TestClient_CreatePage_NoParentNoBody(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{"id": "1", "title": "T", "version": {"number": 1}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.CreatePage(context.Background(), CreatePageParams{SpaceID: "s1", Title: "T", Status: "draft"})
+	if err != nil {
+		t.Fatalf("CreatePage() error: %v", err)
+	}
+	if _, ok := gotBody["parentId"]; ok {
+		t.Errorf("parentId should be omitted when empty, got %v", gotBody["parentId"])
+	}
+	if _, ok := gotBody["body"]; ok {
+		t.Errorf("body should be omitted when nil, got %v", gotBody["body"])
+	}
+	if gotBody["status"] != "draft" {
+		t.Errorf("status = %v, want draft (explicit)", gotBody["status"])
+	}
+}
+
+func TestClient_CreatePage_BadRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"errors":[{"title":"title required"}]}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.CreatePage(context.Background(), CreatePageParams{SpaceID: "s1"})
+	if !errors.Is(err, ErrAPIError) {
+		t.Fatalf("expected ErrAPIError, got %v", err)
+	}
+	var se *StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *StatusError, got %T", err)
+	}
+	if !strings.Contains(se.Message, "title required") {
+		t.Errorf("Message = %q, want to contain 'title required'", se.Message)
+	}
+}
+
+func TestClient_UpdatePage(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotBody   map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{
+			"id": "123",
+			"title": "Updated",
+			"spaceId": "space1",
+			"version": {"number": 6},
+			"_links": {"webui": "/spaces/ENG/pages/123"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	rec, err := c.UpdatePage(context.Background(), UpdatePageParams{
+		ID:      "123",
+		Title:   "Updated",
+		Version: 6,
+		Body:    WriteBody{Representation: BodyFormatStorage, Value: "<p>New</p>"},
+	})
+	if err != nil {
+		t.Fatalf("UpdatePage() error: %v", err)
+	}
+
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", gotMethod)
+	}
+	if gotPath != "/wiki/api/v2/pages/123" {
+		t.Errorf("path = %q, want /wiki/api/v2/pages/123", gotPath)
+	}
+	if gotBody["id"] != "123" {
+		t.Errorf("id = %v, want 123", gotBody["id"])
+	}
+	if gotBody["status"] != "current" {
+		t.Errorf("status = %v, want current (default)", gotBody["status"])
+	}
+	version, ok := gotBody["version"].(map[string]any)
+	if !ok {
+		t.Fatalf("version = %v, want object", gotBody["version"])
+	}
+	if version["number"].(float64) != 6 {
+		t.Errorf("version.number = %v, want 6", version["number"])
+	}
+	body, ok := gotBody["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("body = %v, want object", gotBody["body"])
+	}
+	if body["representation"] != "storage" || body["value"] != "<p>New</p>" {
+		t.Errorf("body = %v, want representation=storage value=<p>New</p>", body)
+	}
+
+	if rec.ID != "123" || rec.Title != "Updated" || rec.Version != 6 {
+		t.Errorf("record = %+v, want ID=123 Title=Updated Version=6", rec)
+	}
+}
+
+func TestClient_UpdatePage_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.UpdatePage(context.Background(), UpdatePageParams{ID: "123", Version: 2})
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_UpdatePage_Conflict(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		w.Write([]byte(`{"message":"version conflict"}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.UpdatePage(context.Background(), UpdatePageParams{ID: "123", Version: 2})
+	var se *StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *StatusError, got %T: %v", err, err)
+	}
+	if se.StatusCode != http.StatusConflict {
+		t.Errorf("StatusCode = %d, want 409", se.StatusCode)
+	}
+	if !strings.Contains(se.Message, "version conflict") {
+		t.Errorf("Message = %q, want to contain 'version conflict'", se.Message)
+	}
+}
+
+func TestClient_DeletePage(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	if err := c.DeletePage(context.Background(), "123"); err != nil {
+		t.Fatalf("DeletePage() error: %v", err)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/wiki/api/v2/pages/123" {
+		t.Errorf("path = %q, want /wiki/api/v2/pages/123", gotPath)
+	}
+}
+
+func TestClient_DeletePage_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	err := c.DeletePage(context.Background(), "123")
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_AddFooterComment(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotBody   map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{
+			"id": "c1",
+			"body": {"storage": {"value": "<p>Nice</p>"}},
+			"_links": {"webui": "/spaces/ENG/pages/123?focusedCommentId=c1"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	cm, err := c.AddFooterComment(context.Background(), "123", WriteBody{Representation: BodyFormatStorage, Value: "<p>Nice</p>"})
+	if err != nil {
+		t.Fatalf("AddFooterComment() error: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/wiki/api/v2/footer-comments" {
+		t.Errorf("path = %q, want /wiki/api/v2/footer-comments", gotPath)
+	}
+	if gotBody["pageId"] != "123" {
+		t.Errorf("pageId = %v, want 123", gotBody["pageId"])
+	}
+	body, ok := gotBody["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("body = %v, want object", gotBody["body"])
+	}
+	if body["representation"] != "storage" || body["value"] != "<p>Nice</p>" {
+		t.Errorf("body = %v, want representation=storage value=<p>Nice</p>", body)
+	}
+
+	if cm.ID != "c1" {
+		t.Errorf("ID = %q, want c1", cm.ID)
+	}
+	if cm.Kind != "footer" {
+		t.Errorf("Kind = %q, want footer", cm.Kind)
+	}
+	if cm.Body != "<p>Nice</p>" {
+		t.Errorf("Body = %q, want <p>Nice</p>", cm.Body)
+	}
+	wantURL := server.URL + "/wiki/spaces/ENG/pages/123?focusedCommentId=c1"
+	if cm.WebURL != wantURL {
+		t.Errorf("WebURL = %q, want %q", cm.WebURL, wantURL)
+	}
+}
+
+func TestClient_AddFooterComment_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.AddFooterComment(context.Background(), "123", WriteBody{Representation: BodyFormatStorage, Value: "x"})
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_AddLabel(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotBody   []map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{
+			"results": [
+				{"prefix": "global", "name": "other", "id": "9"},
+				{"prefix": "global", "name": "backend", "id": "l1"}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	label, err := c.AddLabel(context.Background(), "123", "backend")
+	if err != nil {
+		t.Fatalf("AddLabel() error: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/wiki/rest/api/content/123/label" {
+		t.Errorf("path = %q, want /wiki/rest/api/content/123/label", gotPath)
+	}
+	if len(gotBody) != 1 {
+		t.Fatalf("payload array len = %d, want 1", len(gotBody))
+	}
+	if gotBody[0]["prefix"] != "global" || gotBody[0]["name"] != "backend" {
+		t.Errorf("payload[0] = %v, want prefix=global name=backend", gotBody[0])
+	}
+
+	if label.ID != "l1" || label.Name != "backend" || label.Prefix != "global" {
+		t.Errorf("label = %+v, want ID=l1 Name=backend Prefix=global (matched, not first)", label)
+	}
+}
+
+func TestClient_AddLabel_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.AddLabel(context.Background(), "123", "backend")
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_RemoveLabel(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotName   string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotName = r.URL.Query().Get("name")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	if err := c.RemoveLabel(context.Background(), "123", "wip/foo"); err != nil {
+		t.Fatalf("RemoveLabel() error: %v", err)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/wiki/rest/api/content/123/label" {
+		t.Errorf("path = %q, want /wiki/rest/api/content/123/label", gotPath)
+	}
+	if gotName != "wip/foo" {
+		t.Errorf("name query = %q, want wip/foo", gotName)
+	}
+}
+
+func TestClient_RemoveLabel_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	err := c.RemoveLabel(context.Background(), "123", "wip")
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_UploadAttachment(t *testing.T) {
+	var (
+		gotMethod      string
+		gotPath        string
+		gotContentType string
+		gotToken       string
+		gotFileName    string
+		gotFileData    string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotContentType = r.Header.Get("Content-Type")
+		gotToken = r.Header.Get("X-Atlassian-Token")
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("ParseMultipartForm: %v", err)
+		}
+		if f, hdr, err := r.FormFile("file"); err == nil {
+			defer f.Close()
+			gotFileName = hdr.Filename
+			data, _ := io.ReadAll(f)
+			gotFileData = string(data)
+		} else {
+			t.Errorf("FormFile: %v", err)
+		}
+		w.Write([]byte(`{
+			"results": [
+				{
+					"id": "att1",
+					"title": "diagram.png",
+					"extensions": {"mediaType": "image/png"},
+					"_links": {"download": "/download/attachments/123/diagram.png"}
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "diagram.png")
+	if err := os.WriteFile(fp, []byte("PNGDATA"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	att, err := c.UploadAttachment(context.Background(), "123", fp)
+	if err != nil {
+		t.Fatalf("UploadAttachment() error: %v", err)
+	}
+
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", gotMethod)
+	}
+	if gotPath != "/wiki/rest/api/content/123/child/attachment" {
+		t.Errorf("path = %q, want /wiki/rest/api/content/123/child/attachment", gotPath)
+	}
+	if !strings.HasPrefix(gotContentType, "multipart/form-data") {
+		t.Errorf("Content-Type = %q, want multipart/form-data prefix", gotContentType)
+	}
+	if gotToken != "nocheck" {
+		t.Errorf("X-Atlassian-Token = %q, want nocheck", gotToken)
+	}
+	if gotFileName != "diagram.png" {
+		t.Errorf("filename = %q, want diagram.png", gotFileName)
+	}
+	if gotFileData != "PNGDATA" {
+		t.Errorf("file data = %q, want PNGDATA", gotFileData)
+	}
+
+	if att.ID != "att1" || att.Title != "diagram.png" || att.MediaType != "image/png" {
+		t.Errorf("attachment = %+v, want ID=att1 Title=diagram.png MediaType=image/png", att)
+	}
+	if att.DownloadURL != "/download/attachments/123/diagram.png" {
+		t.Errorf("DownloadURL = %q, want /download/attachments/123/diagram.png", att.DownloadURL)
+	}
+}
+
+func TestClient_UploadAttachment_V1MetadataShape(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseMultipartForm(1 << 20)
+		w.Write([]byte(`{
+			"results": [
+				{
+					"id": "att2",
+					"title": "doc.pdf",
+					"metadata": {"mediaType": "application/pdf"},
+					"_links": {"download": "/download/2"}
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "doc.pdf")
+	if err := os.WriteFile(fp, []byte("PDF"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	att, err := c.UploadAttachment(context.Background(), "123", fp)
+	if err != nil {
+		t.Fatalf("UploadAttachment() error: %v", err)
+	}
+	if att.MediaType != "application/pdf" {
+		t.Errorf("MediaType = %q, want application/pdf (from metadata.mediaType)", att.MediaType)
+	}
+}
+
+func TestClient_UploadAttachment_OpenError(t *testing.T) {
+	c := NewClient("http://example.com", "test@example.com", "api-token")
+	_, err := c.UploadAttachment(context.Background(), "123", "/no/such/file.png")
+	if err == nil {
+		t.Fatal("expected error for missing file, got nil")
+	}
+	if errors.Is(err, ErrPageNotFound) {
+		t.Errorf("open error should not map to ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_UploadAttachment_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "x.txt")
+	if err := os.WriteFile(fp, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.UploadAttachment(context.Background(), "123", fp)
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
 	}
 }
 
