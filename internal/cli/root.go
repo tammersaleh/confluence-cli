@@ -214,7 +214,7 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 		oErr = &output.Error{
 			Err:    "space_not_found",
 			Detail: err.Error(),
-			Hint:   "Check the space key/URL. List spaces with 'confluence space list' (available in a later release).",
+			Hint:   "Check the space key/URL. List spaces with 'confluence space list'.",
 			Code:   output.ExitGeneral,
 		}
 	case errors.Is(err, confluence.ErrAttachmentNotFound):
