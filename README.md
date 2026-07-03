@@ -4,13 +4,14 @@ An agent-first Confluence CLI. The binary is `confluence`; the repository and Go
 module stay `confluence-sync`. Output is JSONL (one JSON object per line);
 commands are non-interactive and scriptable, built for LLM agents and CI.
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`,
-`page get`, `page children`, `page ancestors`, `page tree`, `attachment list`,
-`attachment download`, `search`, `comment list`, `label list`, `user current`,
-and `user info` commands ship today. The remaining surface (attachment upload
-and authoring: page create/update/delete, comment add, label add/remove) is
-designed but not yet implemented. See `SPEC.md` for the full contract and
-planned commands, and `skills/confluence-cli/SKILL.md` for the agent skill.
+The read and write surface ships today: `version`, `space sync`, `space info`,
+`space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`,
+`page tree`, `page create`, `page update`, `page delete`, `attachment list`,
+`attachment download`, `attachment upload`, `search`, `comment list`,
+`comment add`, `label list`, `label add`, `label remove`, `user current`, and
+`user info`. Only Markdown body input for writes and inline comments remain
+unimplemented. See `SPEC.md` for the full contract and
+`skills/confluence-cli/SKILL.md` for the agent skill.
 
 ## Installation
 
@@ -54,6 +55,13 @@ printf '%s' "$TOKEN" | confluence auth login --site https://acme.atlassian.net -
 
 The available commands honor `--quiet` and `--timeout`. Every command ends with
 a `_meta` trailer line.
+
+Write commands that carry content (`page create`, `page update`, `comment add`)
+take the body on stdin, never as a flag. `--body-format` names what you pipe:
+`storage` (a well-formed XHTML fragment) or `adf`/`atlas_doc_format` (an ADF JSON
+doc rooted at `{"type":"doc","version":1,"content":[...]}`). The body is
+validated locally before the API sees it. Markdown body input is not yet
+supported.
 
 ### version
 
@@ -237,6 +245,59 @@ confluence page tree --space ENG
 {"_meta":{"has_more":false}}
 ```
 
+### page create
+
+Create a page. `--space` takes a bare key or a space/page URL; `--parent` nests
+the page under an existing page on the same site. The body is read from stdin;
+`--body-format` is required only when a non-empty body is piped. With no stdin
+(or empty input), the page is created empty. The row carries `id`, `title`,
+`space_id`, `version`, `author_id`, `created_at`, and `web_url`; `parent_id`
+appears when the page has a parent. The body is not echoed.
+
+```bash
+printf '<p>Hello</p>' | confluence page create --space ENG --title "API Design" --body-format storage
+```
+
+```jsonl
+{"id":"123456","title":"API Design","space_id":"98765","version":1,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"_meta":{"has_more":false}}
+```
+
+### page update
+
+Update a page under optimistic concurrency. `--if-version` is the version you
+expect to be current; a mismatch fails with a recoverable `version_conflict` and
+writes nothing. On success the page is written at version `n+1`. Omitting
+`--title` preserves the title; omitting the body preserves the body. The row
+carries `id`, `title`, `version`, `previous_version`, and `web_url`.
+
+```bash
+printf '<p>Revised.</p>' | confluence page update 123456 --if-version 5 --body-format storage
+```
+
+```jsonl
+{"id":"123456","title":"API Design","version":6,"previous_version":5,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"_meta":{"has_more":false}}
+```
+
+### page delete
+
+Delete one or more pages. Delete moves pages to the trash, not a permanent
+purge. A real delete requires `--yes`; without it (and without `--dry-run`) the
+command refuses with `confirmation_required`. `--dry-run` previews. All
+arguments must be on one site. Deleted rows carry `input`, `id`, `deleted:true`,
+`delete_mode:"trash"`; dry-run rows add `title`, `version`, `would_delete:true`.
+
+```bash
+confluence page delete 123456 --dry-run
+confluence page delete 123456 --yes
+```
+
+```jsonl
+{"input":"123456","id":"123456","deleted":true,"delete_mode":"trash"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
 ### attachment list
 
 List a page's attachments. The argument is a numeric page id or page URL. Rows
@@ -264,6 +325,23 @@ confluence attachment download att987 --out ./diagram.png
 ```jsonl
 {"id":"att987","title":"diagram.png","media_type":"image/png","path":"./diagram.png","bytes":48213}
 {"_meta":{"has_more":false}}
+```
+
+### attachment upload
+
+Upload one or more local files as attachments to a page. Each file is uploaded
+independently; a failure on one is reported inline and does not abort the rest.
+Re-uploading a file whose name collides with an existing attachment creates a new
+version rather than a duplicate. Each row echoes the `input` file and carries
+`page_id`, `attachment_id`, `title`, `media_type`, and `uploaded:true`.
+
+```bash
+confluence attachment upload 123456 ./diagram.png
+```
+
+```jsonl
+{"input":"./diagram.png","page_id":"123456","attachment_id":"att987","title":"diagram.png","media_type":"image/png","uploaded":true}
+{"_meta":{"has_more":false,"error_count":0}}
 ```
 
 ### search
@@ -301,6 +379,23 @@ confluence comment list 123456 --inline
 {"_meta":{"has_more":false}}
 ```
 
+### comment add
+
+Add a footer comment to a page. The body is read from stdin (required) and
+`--body-format` names its representation. Only footer comments are supported;
+`--inline` is reserved and returns `not_implemented`. The row carries `id`,
+`page_id`, `kind:"footer"`, `body_format` (the API representation, `storage` or
+`atlas_doc_format`), and `web_url`.
+
+```bash
+printf '<p>Looks good to me.</p>' | confluence comment add 123456 --body-format storage
+```
+
+```jsonl
+{"id":"c1","page_id":"123456","kind":"footer","body_format":"storage","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c1"}
+{"_meta":{"has_more":false}}
+```
+
 ### label list
 
 List a page's labels (numeric id or page URL). Fully drained, so there is no
@@ -313,6 +408,36 @@ confluence label list 123456
 ```jsonl
 {"id":"l1","name":"runbook","prefix":"global"}
 {"_meta":{"has_more":false}}
+```
+
+### label add
+
+Add one or more labels to a page. Each label is applied independently; a failure
+on one is reported inline (with the label as `input`) and does not abort the
+rest. Success rows carry `page_id`, `name`, `prefix`, and `added:true`.
+
+```bash
+confluence label add 123456 runbook on-call
+```
+
+```jsonl
+{"page_id":"123456","name":"runbook","prefix":"global","added":true}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### label remove
+
+Remove one or more labels from a page. Each removal is independent; a per-label
+failure is reported inline. Success rows carry `page_id`, `name`, and
+`removed:true`.
+
+```bash
+confluence label remove 123456 runbook
+```
+
+```jsonl
+{"page_id":"123456","name":"runbook","removed":true}
+{"_meta":{"has_more":false,"error_count":0}}
 ```
 
 ### user current

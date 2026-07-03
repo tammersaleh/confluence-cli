@@ -1,6 +1,6 @@
 ---
 name: confluence-cli
-description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), inspect spaces (space info/list), read/download attachments, CQL search, list comments and labels, and look up users, with the write surface arriving in later releases"
+description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), inspect spaces (space info/list), attachments, CQL search, comments, labels, users, and write content (page create/update/delete, attachment upload, comment add, label add/remove) with storage or ADF bodies on stdin"
 argument-hint: ""
 allowed-tools:
   - Bash(confluence *)
@@ -11,11 +11,13 @@ allowed-tools:
 Agent-first CLI for Confluence. JSONL output (one JSON object per line). Every
 command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 
-Today the `version`, `space sync`, `space info`, `space list`, `auth`,
-`page list`, `page get`, `page children`, `page ancestors`, `page tree`,
-`attachment list`, `attachment download`, `search`, `comment list`,
-`label list`, `user current`, and `user info` commands ship. The write surface
-below is planned but not yet implemented - do not invoke it.
+Both reads and writes ship today: `version`, `space sync`, `space info`,
+`space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`,
+`page tree`, `page create`, `page update`, `page delete`, `attachment list`,
+`attachment download`, `attachment upload`, `search`, `comment list`,
+`comment add`, `label list`, `label add`, `label remove`, `user current`, and
+`user info`. Read commands are below; writes are under "Writing content". Only
+Markdown body input for writes and inline comments are not yet available.
 
 ## Prerequisites
 
@@ -330,12 +332,159 @@ confluence user info a1 a2 a3
 {"_meta":{"has_more":false,"error_count":1}}
 ```
 
-## Planned (not yet available)
+## Writing content
 
-Designed but not implemented. Do not run these yet:
+Writes that carry content (`page create`, `page update`, `comment add`) take the
+body on **stdin**, never as a flag. `--body-format` names the representation of
+what you pipe. The body is validated locally before the API sees it; a malformed
+body fails with `invalid_body` and nothing is written.
 
-- `confluence attachment upload` - upload files to a page.
-- `confluence comment add` - add a footer or inline comment.
-- `confluence label add|remove` - add or remove labels.
-- `confluence page create|update|delete` - authoring (Markdown-in, with
-  optimistic concurrency on update).
+### The two body formats
+
+- `storage` - Confluence storage format: a well-formed XHTML fragment, e.g.
+  `<p>Hello</p>`. This is what `page get --body-format storage` returns, so it
+  round-trips cleanly. Prefer it for prose and most authoring.
+- `adf` (alias `atlas_doc_format`) - Atlassian Document Format: a JSON document
+  whose root is `{"type":"doc","version":1,"content":[...]}`. Use it when you
+  already have ADF (e.g. from `page get --body-format adf`) or need node types
+  storage can't express cleanly.
+
+Markdown body input is not yet supported. Pipe storage or ADF.
+
+### Creating a page
+
+Storage body:
+
+```bash
+printf '<p>Hello</p>' | confluence page create --space ENG --title "X" --body-format storage
+```
+
+ADF body (same page, ADF equivalent):
+
+```bash
+printf '{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]}]}' | confluence page create --space ENG --title "X" --body-format adf
+```
+
+`--body-format` is required only when a non-empty body is piped. With no stdin
+(or empty input) the page is created empty and `--body-format` may be omitted.
+`--parent <id|url>` nests the page under an existing page on the same site. The
+row carries `id`, `title`, `space_id`, `version`, `author_id`, `created_at`,
+`web_url` (and `parent_id` when nested); the body is not echoed.
+
+```jsonl
+{"id":"123456","title":"X","space_id":"98765","version":1,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"_meta":{"has_more":false}}
+```
+
+### Bodies that look right but fail
+
+These pass a casual eye but are rejected locally as `invalid_body`:
+
+- Storage that isn't well-formed XML - an unclosed or mismatched tag:
+  `<p>hi` or `<b><i>hi</b></i>`. Every tag must close and nest correctly
+  (HTML void elements like `<br>` may self-close). Do not wrap the fragment in
+  `<?xml ...?>`, `<!doctype>`, `<html>`, or `<body>`.
+- ADF that is a top-level array instead of a doc object:
+  `[{"type":"paragraph",...}]`. The root must be `{"type":"doc","version":1,...}`.
+- ADF missing the numeric `version`:
+  `{"type":"doc","content":[]}`.
+- An ADF text node without a `text` string:
+  `{"type":"text"}` inside `content`. A text node must be
+  `{"type":"text","text":"..."}`.
+
+A correct minimal ADF doc:
+
+```json
+{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]}]}
+```
+
+### Updating a page (optimistic concurrency)
+
+`page update` requires `--if-version <n>`, the version you expect to be current.
+If the live version differs, the command fails with a recoverable
+`version_conflict` and writes nothing; on success the page is written at `n+1`.
+Omitting `--title` preserves the title; omitting the piped body preserves the
+body.
+
+The safe pattern is get, then update with the observed version:
+
+```bash
+version=$(confluence page get 123456 --fields version | head -1 | jq .version)
+printf '<p>Revised.</p>' | confluence page update 123456 --if-version "$version" --body-format storage
+```
+
+```jsonl
+{"id":"123456","title":"X","version":6,"previous_version":5,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"_meta":{"has_more":false}}
+```
+
+On a conflict, re-fetch and retry with the new version:
+
+```json
+{"error":"version_conflict","detail":"expected current version 5, got 7","hint":"Fetch the latest with 'confluence page get 123456' and retry with --if-version 7","input":"123456"}
+```
+
+### Deleting a page
+
+`page delete` moves pages to the **trash** (`delete_mode:"trash"`), not a
+permanent purge. A real delete requires `--yes`; without it (and without
+`--dry-run`) the command refuses with `confirmation_required` and deletes
+nothing. Preview first with `--dry-run`:
+
+```bash
+confluence page delete 123456 --dry-run
+confluence page delete 123456 --yes
+```
+
+```jsonl
+{"input":"123456","id":"123456","deleted":true,"delete_mode":"trash"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### Uploading attachments
+
+`attachment upload` sends local files as multipart uploads. Each file is
+independent; a per-file failure is reported inline and does not abort the rest.
+Re-uploading a file whose name matches an existing attachment creates a **new
+version** of it rather than a duplicate.
+
+```bash
+confluence attachment upload 123456 ./diagram.png ./notes.pdf
+```
+
+```jsonl
+{"input":"./diagram.png","page_id":"123456","attachment_id":"att987","title":"diagram.png","media_type":"image/png","uploaded":true}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### Adding comments and labels
+
+`comment add` writes a footer comment; the body is read from stdin and
+`--body-format` is required. `--inline` is reserved and returns
+`not_implemented`. The row's `body_format` is the API representation (`storage`
+or `atlas_doc_format`).
+
+```bash
+printf '<p>Looks good to me.</p>' | confluence comment add 123456 --body-format storage
+```
+
+`label add`/`label remove` take one or more labels; each is applied
+independently with inline per-label errors.
+
+```bash
+confluence label add 123456 runbook on-call
+confluence label remove 123456 on-call
+```
+
+```jsonl
+{"page_id":"123456","name":"runbook","prefix":"global","added":true}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+## Not yet available
+
+- Markdown body input for writes. `page create`, `page update`, and
+  `comment add` accept `storage` or `adf` on stdin; Markdown-in is not yet
+  wired up.
+- Inline comments. `comment add` writes footer comments only; `--inline`
+  returns `not_implemented`.

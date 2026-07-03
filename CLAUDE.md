@@ -6,13 +6,14 @@ one JSON object per line; commands are non-interactive and scriptable. Built on
 Kong. Auth is an API token + email over HTTP Basic.
 
 `SPEC.md` is the source of truth for the full command surface and output
-contract. The `version`, `space sync`, `space info`, `space list`, `auth`,
-`page list`, `page get`, `page children`, `page ancestors`, `page tree`,
-`attachment list`, `attachment download`, `search`, `comment list`,
-`label list`, `user current`, and `user info` commands ship today; the rest
-(attachment upload and the writes) is designed but not implemented. See
-`README.md` for user-facing usage and `skills/confluence-cli/SKILL.md` for the
-agent-facing skill.
+contract. The read and write surface ships today: `version`, `space sync`,
+`space info`, `space list`, `auth`, `page list`, `page get`, `page children`,
+`page ancestors`, `page tree`, `page create`, `page update`, `page delete`,
+`attachment list`, `attachment download`, `attachment upload`, `search`,
+`comment list`, `comment add`, `label list`, `label add`, `label remove`,
+`user current`, and `user info`. Only Markdown body input for writes and inline
+comments remain unimplemented. See `README.md` for user-facing usage and
+`skills/confluence-cli/SKILL.md` for the agent-facing skill.
 
 ## Architecture
 
@@ -24,11 +25,11 @@ internal/
     version.go                 `version` command.
     space.go                   `space sync` (wraps the sync engine), `space info`, and `space list` commands.
     auth.go                    `auth login|status|logout` commands.
-    page.go                    `page list`, `page get`, `page children`, `page ancestors`, `page tree` commands. Derives site/space from --space or URL args; --body-format incl. derived markdown. `page tree` builds the hierarchy in-command, sorted by ID (not display order).
-    attachment.go              `attachment list` and `attachment download` commands.
+    page.go                    `page list/get/children/ancestors/tree` (reads) + `page create/update/delete` (writes). Derives site/space from --space or URL args; --body-format incl. derived markdown on read. `page tree` builds the hierarchy in-command, sorted by ID (not display order). `page update` preflights GetPage to enforce --if-version (version_conflict) and preserve title/body when not supplied.
+    attachment.go              `attachment list`, `attachment download`, `attachment upload` commands.
     search.go                  `search <cql>` command. CQL positional, site-wide, paginated (--limit/--cursor/--all).
-    comment.go                 `comment list` command. Drains footer + inline; --footer/--inline narrow.
-    label.go                   `label list` command. Fully drained.
+    comment.go                 `comment list` + `comment add` (footer only; --inline returns not_implemented).
+    label.go                   `label list`, `label add`, `label remove`. Add/remove are per-label (independent, inline errors).
     user.go                    `user current` and `user info <accountId>...` commands.
   output/
     output.go                  Printer (JSONL rows + _meta trailer), Meta, Error, ExitError, exit codes, field filtering.
@@ -45,6 +46,8 @@ internal/
     url.go                     Parses Confluence space URLs into baseURL + spaceKey.
   confluenceurl/
     confluenceurl.go           Parses page/space URLs into a Ref (Kind, BaseURL, SpaceKey, PageID). CommonSite enforces one-site-per-invocation for page get.
+  bodywrite/
+    bodywrite.go               Write-command body input: Read (stdin, TTY vs pipe) + Prepare (validate storage XHTML or ADF locally, return representation+value). invalid bodies fail before the API sees them.
   converter/
     converter.go               Converts Confluence storage format (XHTML) to GFM Markdown.
   sync/
@@ -114,7 +117,7 @@ old Cobra tool's `1 = config / 2 = auth / 3 = api / 4 = filesystem` codes
 
 ## Commands
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `attachment list`, `attachment download`, `search`, `comment list`, `label list`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`. Write commands that carry content (`page create`, `page update`, `comment add`) take the body on stdin with `--body-format storage|adf` (validated locally via `internal/bodywrite` before the API sees it).
 
 - `confluence version` - emits the build version, then the trailer.
 - `confluence space sync <space-url> <output-dir>` - one-way space crawl to local Markdown. Flags: `--prune`, `--dry-run`, `--quiet`, `--timeout`, `--trace`. Progress goes to stderr; stdout carries a single summary object then the trailer.
@@ -128,17 +131,23 @@ The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `p
 - `confluence page children <id|url>` - direct children of a page. Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`.
 - `confluence page ancestors <id|url>` - ancestor chain, root-most first. Not paginated. Rows carry `id`, `type` (the endpoint omits `title`).
 - `confluence page tree --space <key|url>` - space page hierarchy in DFS order. Rows carry `id`, `title`, `type`, `depth`, and `parent_id` when present. Siblings sorted by ID (deterministic, not Confluence display order).
+- `confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf]` - create a page; body on stdin (`--body-format` required only for a non-empty body; empty stdin = empty page). Row: `id`, `title`, `space_id`, `parent_id?`, `version`, `author_id`, `created_at`, `web_url`. Body not echoed.
+- `confluence page update <id|url> --if-version <n> [--title <t>] [--body-format storage|adf]` - update under optimistic concurrency; body on stdin. A live-version mismatch fails with `version_conflict` and writes nothing. Title-only preserves body; body-only preserves title. Row: `id`, `title`, `version`, `previous_version`, `web_url`.
+- `confluence page delete <id|url>...` - move pages to trash (not purge). `--yes` required for a real delete; without it (and without `--dry-run`) fails with `confirmation_required`. `--dry-run` previews. Rows echo `input`; per-item errors bump `_meta.error_count`.
 - `confluence attachment list <page id|url>` - list a page's attachments. Rows carry `id`, `title`, `media_type`, `download_url` (absolute), `page_id`.
 - `confluence attachment download <id> [-o|--out <path>]` - download an attachment by id (not a URL) to a file; defaults to the attachment filename in the current dir. Emits `id`, `title`, `media_type`, `path`, `bytes`.
+- `confluence attachment upload <page id|url> <file>...` - upload files as attachments (per-file, inline errors). A filename collision creates a new version. Rows echo `input` and carry `page_id`, `attachment_id`, `title`, `media_type`, `uploaded:true`.
 - `confluence search <cql>` - CQL search. The CQL is the positional arg; site-wide (from `--site` or the single stored default). Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `space_key`, `excerpt`, `url`.
 - `confluence comment list <page id|url>` - a page's comments. Drains footer + inline (no cursor); `--footer`/`--inline` narrow to one kind. Rows carry `id`, `kind` (`footer`/`inline`), `body`, `author_id`, `created_at`, `web_url`. A missing page is a fatal `page_not_found`.
+- `confluence comment add <page id|url> --body-format storage|adf` - add a footer comment; body on stdin (required). `--inline` returns `not_implemented`. Row: `id`, `page_id`, `kind:"footer"`, `body_format`, `web_url`.
 - `confluence label list <page id|url>` - a page's labels, fully drained. Rows carry `id`, `name`, `prefix`.
+- `confluence label add <page id|url> <label>...` - add labels (per-label, inline errors). Rows carry `page_id`, `name`, `prefix`, `added:true`.
+- `confluence label remove <page id|url> <label>...` - remove labels (per-label, inline errors). Rows carry `page_id`, `name`, `removed:true`.
 - `confluence user current` - the authenticated user. A single row with `account_id`, `display_name`, `email`.
 - `confluence user info <accountId>...` - look up users by account id. Rows echo `input` and carry `account_id`, `display_name`, `email`. Unknown ids go inline as `user_not_found` and bump `_meta.error_count`.
 
-The rest of the surface (`attachment upload` and the write commands:
-`page create|update|delete`, `comment add`, `label add|remove`) is designed but
-not yet implemented. See `SPEC.md`.
+Only Markdown body input for writes and inline comments remain unimplemented. See
+`SPEC.md`.
 
 ### Global flags
 
