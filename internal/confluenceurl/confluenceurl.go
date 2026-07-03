@@ -59,7 +59,10 @@ func Parse(raw string) (ref Ref, matched bool, err error) {
 	if err != nil {
 		return Ref{}, true, fmt.Errorf("not a valid URL: %w", err)
 	}
-	host := strings.ToLower(u.Hostname())
+	// Use u.Host (not u.Hostname()) so a non-default port is preserved in the
+	// canonical BaseURL. Lowercasing is safe: hostnames are case-insensitive and
+	// digits/colon in the port are unaffected.
+	host := strings.ToLower(u.Host)
 	if host == "" {
 		return Ref{}, true, fmt.Errorf("URL has no host: %q", raw)
 	}
@@ -88,19 +91,18 @@ func Parse(raw string) (ref Ref, matched bool, err error) {
 }
 
 // parseSpaces handles /spaces/KEY and /spaces/KEY/pages/ID[/Title].
+//
+// /spaces/KEY/pages/ID is a page. Any other trailing content after the space
+// key (e.g. /overview, /blog/..., a single extra segment) is treated as a
+// space URL with the suffix ignored, matching the Cloud UI's space URLs.
 func parseSpaces(base string, segs []string) (Ref, bool, error) {
 	if len(segs) < 2 || segs[1] == "" {
 		return Ref{}, true, fmt.Errorf("space URL missing space key")
 	}
 	spaceKey := segs[1]
 
-	// /spaces/KEY -> space.
-	if len(segs) == 2 {
-		return Ref{Kind: KindSpace, BaseURL: base, SpaceKey: spaceKey}, true, nil
-	}
-
 	// /spaces/KEY/pages/ID[/Title] -> page.
-	if segs[2] == "pages" {
+	if len(segs) > 2 && segs[2] == "pages" {
 		if len(segs) < 4 {
 			return Ref{}, true, fmt.Errorf("page URL missing page id")
 		}
@@ -111,7 +113,8 @@ func parseSpaces(base string, segs []string) (Ref, bool, error) {
 		return Ref{Kind: KindPage, BaseURL: base, SpaceKey: spaceKey, PageID: id}, true, nil
 	}
 
-	return Ref{}, true, fmt.Errorf("unrecognized space URL path %q", "/"+strings.Join(segs, "/"))
+	// /spaces/KEY and anything else (/overview, /blog/..., etc.) -> space.
+	return Ref{Kind: KindSpace, BaseURL: base, SpaceKey: spaceKey}, true, nil
 }
 
 // parsePagesViewpage handles /pages/viewpage.action?pageId=ID.

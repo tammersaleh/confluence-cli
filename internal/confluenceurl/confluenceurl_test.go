@@ -34,6 +34,12 @@ func TestParse(t *testing.T) {
 			want: Ref{Kind: KindSpace, BaseURL: "https://acme.atlassian.net", SpaceKey: "ENG"}},
 		{name: "space host lowercased", raw: "https://ACME.atlassian.net/wiki/spaces/ENG", matched: true,
 			want: Ref{Kind: KindSpace, BaseURL: "https://acme.atlassian.net", SpaceKey: "ENG"}},
+		{name: "space keeps port", raw: "https://confluence.example.com:8090/wiki/spaces/OPS", matched: true,
+			want: Ref{Kind: KindSpace, BaseURL: "https://confluence.example.com:8090", SpaceKey: "OPS"}},
+		{name: "space overview suffix", raw: "https://acme.atlassian.net/wiki/spaces/ENG/overview", matched: true,
+			want: Ref{Kind: KindSpace, BaseURL: "https://acme.atlassian.net", SpaceKey: "ENG"}},
+		{name: "space blog suffix", raw: "https://acme.atlassian.net/wiki/spaces/ENG/blog/2024/x", matched: true,
+			want: Ref{Kind: KindSpace, BaseURL: "https://acme.atlassian.net", SpaceKey: "ENG"}},
 
 		// Page via /spaces/KEY/pages/ID.
 		{name: "page", raw: "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345", matched: true,
@@ -44,6 +50,8 @@ func TestParse(t *testing.T) {
 			want: Ref{Kind: KindPage, BaseURL: "https://acme.atlassian.net", SpaceKey: "ENG", PageID: "12345"}},
 		{name: "page without wiki", raw: "https://acme.atlassian.net/spaces/ENG/pages/12345", matched: true,
 			want: Ref{Kind: KindPage, BaseURL: "https://acme.atlassian.net", SpaceKey: "ENG", PageID: "12345"}},
+		{name: "page keeps port", raw: "https://confluence.example.com:8090/wiki/spaces/ENG/pages/12345", matched: true,
+			want: Ref{Kind: KindPage, BaseURL: "https://confluence.example.com:8090", SpaceKey: "ENG", PageID: "12345"}},
 		{name: "page non-numeric id", raw: "https://acme.atlassian.net/wiki/spaces/ENG/pages/abc", matched: true, wantErr: true},
 
 		// Page via viewpage.action.
