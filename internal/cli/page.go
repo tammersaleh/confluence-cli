@@ -2,9 +2,11 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/tammersaleh/confluence-sync/internal/bodywrite"
 	"github.com/tammersaleh/confluence-sync/internal/confluence"
 	"github.com/tammersaleh/confluence-sync/internal/confluenceurl"
 	"github.com/tammersaleh/confluence-sync/internal/converter"
@@ -17,6 +19,9 @@ type PageCmd struct {
 	Children  PageChildrenCmd  `cmd:"" help:"List a page's direct children."`
 	Ancestors PageAncestorsCmd `cmd:"" help:"List a page's ancestors (root-most first)."`
 	Tree      PageTreeCmd      `cmd:"" help:"Print a space's page hierarchy (ordered by ID, not display order)."`
+	Create    PageCreateCmd    `cmd:"" help:"Create a page."`
+	Update    PageUpdateCmd    `cmd:"" help:"Update a page (optimistic concurrency)."`
+	Delete    PageDeleteCmd    `cmd:"" help:"Delete pages (moves to trash)."`
 }
 
 // resolvePageRef derives the site hint and page id from a single ref, which is
@@ -537,4 +542,335 @@ func attachmentResolver(baseURL string, atts []confluence.Attachment) func(strin
 		u, ok := m[name]
 		return u, ok
 	}
+}
+
+// resolveWriteBody reads a piped body from stdin and prepares it for a write.
+// A body is only "present" when non-whitespace content was piped: an absent
+// (interactive TTY) stdin and an empty/whitespace-only pipe both yield a nil
+// body, so an empty page needs no --body-format. bodyFormat is required whenever
+// real content is present.
+func resolveWriteBody(cli *CLI, bodyFormat string) (*confluence.WriteBody, error) {
+	present, raw, err := bodywrite.Read(cli.Stdin())
+	if err != nil {
+		return nil, &output.Error{
+			Err:    "general",
+			Detail: err.Error(),
+			Code:   output.ExitGeneral,
+		}
+	}
+	if !present || strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	if bodyFormat == "" {
+		return nil, &output.Error{
+			Err:    "invalid_input",
+			Detail: "a body was piped but --body-format is not set",
+			Hint:   "Pass --body-format storage or --body-format adf.",
+			Code:   output.ExitGeneral,
+		}
+	}
+	repr, val, err := bodywrite.Prepare(bodyFormat, raw)
+	if err != nil {
+		return nil, &output.Error{
+			Err:    "invalid_body",
+			Detail: err.Error(),
+			Hint:   "Body must be valid storage XHTML or an ADF doc. See the skill.",
+			Code:   output.ExitGeneral,
+		}
+	}
+	return &confluence.WriteBody{Representation: confluence.APIBodyFormat(repr), Value: val}, nil
+}
+
+type PageCreateCmd struct {
+	Space      string `required:"" help:"Space key or URL."`
+	Title      string `required:"" help:"Page title."`
+	Parent     string `help:"Parent page ID or URL."`
+	BodyFormat string `help:"storage or adf (required when piping a body)."`
+}
+
+func (c *PageCreateCmd) Run(cli *CLI) error {
+	siteHint, spaceKey, err := (&PageListCmd{Space: c.Space}).resolveSpace(cli)
+	if err != nil {
+		return err
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	// Resolve --parent to a bare page id. A parent URL must live on the same
+	// site as the space.
+	parentID := ""
+	if c.Parent != "" {
+		pSite, pID, perr := resolvePageRef(cli, c.Parent)
+		if perr != nil {
+			return perr
+		}
+		if pSite != "" && siteHint != "" && pSite != siteHint {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "parent is on a different site than --space",
+				Hint:   "Pass a parent page on the same site as the space.",
+				Input:  c.Parent,
+				Code:   output.ExitGeneral,
+			}
+		}
+		parentID = pID
+	}
+
+	body, err := resolveWriteBody(cli, c.BodyFormat)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	space, err := client.GetSpace(ctx, spaceKey)
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+
+	rec, err := client.CreatePage(ctx, confluence.CreatePageParams{
+		SpaceID:  space.ID,
+		Title:    c.Title,
+		ParentID: parentID,
+		Body:     body,
+	})
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+
+	p := cli.NewPrinter()
+	row := map[string]any{
+		"id":         rec.ID,
+		"title":      rec.Title,
+		"space_id":   rec.SpaceID,
+		"version":    rec.Version,
+		"author_id":  rec.AuthorID,
+		"created_at": rec.CreatedAt,
+		"web_url":    rec.WebURL,
+	}
+	if rec.ParentID != "" {
+		row["parent_id"] = rec.ParentID
+	}
+	if err := p.PrintItem(row); err != nil {
+		return err
+	}
+	return p.PrintMeta(output.Meta{})
+}
+
+type PageUpdateCmd struct {
+	Ref        string `arg:"" name:"id-or-url" help:"Page ID or URL."`
+	IfVersion  int    `name:"if-version" required:"" help:"Expected current version; the update is rejected if it differs."`
+	Title      string `help:"New title (keeps current if omitted)."`
+	BodyFormat string `help:"storage or adf (required when piping a body)."`
+}
+
+func (c *PageUpdateCmd) Run(cli *CLI) error {
+	siteHint, pageID, err := resolvePageRef(cli, c.Ref)
+	if err != nil {
+		return err
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	body, err := resolveWriteBody(cli, c.BodyFormat)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	// Preflight: fetch the current page to enforce optimistic concurrency and to
+	// preserve the existing body when none was piped.
+	cur, err := client.GetPage(ctx, pageID, confluence.BodyFormatStorage)
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+	if cur.Version != c.IfVersion {
+		return &output.Error{
+			Err:    "version_conflict",
+			Detail: fmt.Sprintf("expected current version %d, got %d", c.IfVersion, cur.Version),
+			Hint:   fmt.Sprintf("Fetch the latest with 'confluence page get %s' and retry with --if-version %d.", pageID, cur.Version),
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+
+	newTitle := c.Title
+	if newTitle == "" {
+		newTitle = cur.Title
+	}
+	wb := confluence.WriteBody{Representation: confluence.BodyFormatStorage, Value: cur.Body}
+	if body != nil {
+		wb = *body
+	}
+
+	rec, err := client.UpdatePage(ctx, confluence.UpdatePageParams{
+		ID:      pageID,
+		Title:   newTitle,
+		Version: c.IfVersion + 1,
+		Body:    wb,
+	})
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+
+	p := cli.NewPrinter()
+	row := map[string]any{
+		"id":               rec.ID,
+		"title":            rec.Title,
+		"version":          rec.Version,
+		"previous_version": c.IfVersion,
+		"web_url":          rec.WebURL,
+	}
+	if err := p.PrintItem(row); err != nil {
+		return err
+	}
+	return p.PrintMeta(output.Meta{})
+}
+
+type PageDeleteCmd struct {
+	Refs   []string `arg:"" name:"id-or-url" help:"Page IDs or URLs (all on one site)."`
+	Yes    bool     `help:"Confirm deletion (required unless --dry-run)."`
+	DryRun bool     `name:"dry-run" help:"Preview without deleting."`
+}
+
+func (c *PageDeleteCmd) Run(cli *CLI) error {
+	// pair binds each caller input to the page id resolved from it.
+	type pair struct {
+		input  string
+		pageID string
+	}
+	var pairs []pair
+	var urlRefs []confluenceurl.Ref
+	var siteURLArg string
+
+	for _, arg := range c.Refs {
+		r, matched, perr := confluenceurl.Parse(arg)
+		if matched && perr != nil {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: perr.Error(),
+				Hint:   "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123).",
+				Input:  arg,
+				Code:   output.ExitGeneral,
+			}
+		}
+		if !matched {
+			pairs = append(pairs, pair{input: arg, pageID: arg})
+			continue
+		}
+		if r.Kind != confluenceurl.KindPage || r.PageID == "" {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "URL does not identify a page",
+				Hint:   "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123).",
+				Input:  arg,
+				Code:   output.ExitGeneral,
+			}
+		}
+		urlRefs = append(urlRefs, r)
+		siteURLArg = arg
+		pairs = append(pairs, pair{input: arg, pageID: r.PageID})
+	}
+
+	siteHint := ""
+	if len(urlRefs) > 0 {
+		site, cerr := confluenceurl.CommonSite(urlRefs)
+		if cerr != nil {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "all pages must be on one site",
+				Hint:   "Split into one invocation per site.",
+				Code:   output.ExitGeneral,
+			}
+		}
+		siteHint = site
+		if cli.Site != "" {
+			if err := requireSiteMatch(cli.Site, siteURLArg); err != nil {
+				return err
+			}
+		}
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	// Refuse a real delete without confirmation, before any mutation.
+	if !c.DryRun && !c.Yes {
+		return &output.Error{
+			Err:    "confirmation_required",
+			Detail: "refusing to delete without --yes",
+			Hint:   "Re-run with --yes to delete, or --dry-run to preview.",
+			Code:   output.ExitGeneral,
+		}
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	p := cli.NewPrinter()
+	errCount := 0
+	for _, pr := range pairs {
+		if c.DryRun {
+			cur, err := client.GetPage(ctx, pr.pageID, confluence.BodyFormatStorage)
+			if err != nil {
+				oErr := cli.ClassifyError(err)
+				oErr.Input = pr.input
+				if err := p.PrintItem(oErr.AsItem()); err != nil {
+					return err
+				}
+				errCount++
+				continue
+			}
+			row := map[string]any{
+				"input":        pr.input,
+				"id":           pr.pageID,
+				"title":        cur.Title,
+				"version":      cur.Version,
+				"would_delete": true,
+				"delete_mode":  "trash",
+			}
+			if err := p.PrintItem(row); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := client.DeletePage(ctx, pr.pageID); err != nil {
+			oErr := cli.ClassifyError(err)
+			oErr.Input = pr.input
+			if err := p.PrintItem(oErr.AsItem()); err != nil {
+				return err
+			}
+			errCount++
+			continue
+		}
+		row := map[string]any{
+			"input":       pr.input,
+			"id":          pr.pageID,
+			"deleted":     true,
+			"delete_mode": "trash",
+		}
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+	}
+
+	if err := p.PrintMeta(output.Meta{ErrorCount: errCount}); err != nil {
+		return err
+	}
+	if errCount > 0 {
+		return &output.ExitError{Code: output.ExitGeneral}
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -1073,5 +1074,487 @@ func TestPageList_SiteFlagMismatch(t *testing.T) {
 	}
 	if oErr.Err != "invalid_input" || oErr.Code != output.ExitGeneral {
 		t.Errorf("got Err=%q Code=%d, want invalid_input/%d", oErr.Err, oErr.Code, output.ExitGeneral)
+	}
+}
+
+// --- write command tests ---
+
+func setEnvCreds(t *testing.T, siteURL string) {
+	t.Helper()
+	t.Setenv("CONFLUENCE_SITE", siteURL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+}
+
+func newWriteCLI(t *testing.T, out, errBuf *bytes.Buffer, stdin string) *CLI {
+	t.Helper()
+	c := &CLI{}
+	c.SetOutput(out, errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+	c.SetInput(strings.NewReader(stdin))
+	return c
+}
+
+// capturedCreate records the decoded POST body of a create call.
+type capturedCreate struct {
+	spaceID  string
+	title    string
+	parentID string
+	hasBody  bool
+	bodyRep  string
+	bodyVal  string
+}
+
+// pageCreateServer serves the space lookup and POST /pages, capturing the body.
+func pageCreateServer(t *testing.T, cap *capturedCreate) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/wiki/api/v2/spaces":
+			_, _ = w.Write([]byte(`{"results":[{"id":"12345","key":"ENG","name":"Engineering"}]}`))
+		case r.URL.Path == "/wiki/api/v2/pages" && r.Method == http.MethodPost:
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode POST body: %v", err)
+			}
+			cap.spaceID, _ = payload["spaceId"].(string)
+			cap.title, _ = payload["title"].(string)
+			cap.parentID, _ = payload["parentId"].(string)
+			if b, ok := payload["body"].(map[string]any); ok {
+				cap.hasBody = true
+				cap.bodyRep, _ = b["representation"].(string)
+				cap.bodyVal, _ = b["value"].(string)
+			}
+			resp := map[string]any{
+				"id":        "999",
+				"title":     cap.title,
+				"spaceId":   "12345",
+				"authorId":  "user1",
+				"createdAt": "2024-01-01T00:00:00Z",
+				"version":   map[string]any{"number": 1},
+				"_links":    map[string]any{"webui": "/spaces/ENG/pages/999/T"},
+			}
+			if cap.parentID != "" {
+				resp["parentId"] = cap.parentID
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestPageCreate_StorageBody(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedCreate
+	server := pageCreateServer(t, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "<p>Hi</p>")
+
+	cmd := &PageCreateCmd{Space: "ENG", Title: "New Page", BodyFormat: "storage"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if cap.bodyRep != "storage" || cap.bodyVal != "<p>Hi</p>" {
+		t.Errorf("body sent = %q/%q, want storage/<p>Hi</p>", cap.bodyRep, cap.bodyVal)
+	}
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 row + meta, got %d: %q", len(lines), out.String())
+	}
+	row := lines[0]
+	if row["id"] != "999" || row["title"] != "New Page" || row["space_id"] != "12345" || row["version"] != float64(1) {
+		t.Errorf("row shape unexpected: %v", row)
+	}
+	if _, ok := row["body"]; ok {
+		t.Errorf("row should not echo body: %v", row)
+	}
+}
+
+func TestPageCreate_ADFBody(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedCreate
+	server := pageCreateServer(t, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	adf := `{"version":1,"type":"doc","content":[]}`
+	c := newWriteCLI(t, &out, &errBuf, adf)
+
+	cmd := &PageCreateCmd{Space: "ENG", Title: "ADF Page", BodyFormat: "adf"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if cap.bodyRep != "atlas_doc_format" {
+		t.Errorf("body representation = %q, want atlas_doc_format", cap.bodyRep)
+	}
+}
+
+func TestPageCreate_NoBody(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedCreate
+	server := pageCreateServer(t, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	// Empty pipe is present-but-empty: no body, and no --body-format required.
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageCreateCmd{Space: "ENG", Title: "Empty"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if cap.hasBody {
+		t.Errorf("expected no body sent, got rep=%q val=%q", cap.bodyRep, cap.bodyVal)
+	}
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 || lines[0]["id"] != "999" {
+		t.Errorf("expected created row + meta: %q", out.String())
+	}
+}
+
+func TestPageCreate_BodyNoFormat(t *testing.T) {
+	clearCredEnv(t)
+	setEnvCreds(t, "https://acme.atlassian.net")
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "<p>x</p>")
+
+	cmd := &PageCreateCmd{Space: "ENG", Title: "T"}
+	err := cmd.Run(c)
+
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Err != "invalid_input" || oErr.Code != output.ExitGeneral {
+		t.Errorf("got Err=%q Code=%d, want invalid_input/%d", oErr.Err, oErr.Code, output.ExitGeneral)
+	}
+}
+
+func TestPageCreate_ParentResolves(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedCreate
+	server := pageCreateServer(t, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageCreateCmd{Space: "ENG", Title: "Child", Parent: "555"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if cap.parentID != "555" {
+		t.Errorf("parentId sent = %q, want 555", cap.parentID)
+	}
+	lines := parseLines(t, out.String())
+	if lines[0]["parent_id"] != "555" {
+		t.Errorf("row parent_id = %v, want 555", lines[0]["parent_id"])
+	}
+}
+
+// capturedUpdate records whether a PUT happened and its decoded body.
+type capturedUpdate struct {
+	called  bool
+	title   string
+	version int
+	bodyRep string
+	bodyVal string
+}
+
+// pageUpdateServer serves the preflight GET and the PUT, capturing the PUT body.
+func pageUpdateServer(t *testing.T, curVersion int, curTitle, curBody string, cap *capturedUpdate) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/wiki/api/v2/pages/"
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, prefix)
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`{
+				"id": "` + id + `",
+				"title": ` + jsonQuote(curTitle) + `,
+				"spaceId": "space1",
+				"authorId": "user1",
+				"createdAt": "2024-01-01T00:00:00Z",
+				"body": {"storage": {"value": ` + jsonQuote(curBody) + `}},
+				"version": {"number": ` + fmt.Sprint(curVersion) + `, "createdAt": "2024-06-20T00:00:00Z"},
+				"_links": {"webui": "/spaces/T/pages/` + id + `/P"}
+			}`))
+		case http.MethodPut:
+			cap.called = true
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode PUT body: %v", err)
+			}
+			cap.title, _ = payload["title"].(string)
+			if v, ok := payload["version"].(map[string]any); ok {
+				if n, ok := v["number"].(float64); ok {
+					cap.version = int(n)
+				}
+			}
+			if b, ok := payload["body"].(map[string]any); ok {
+				cap.bodyRep, _ = b["representation"].(string)
+				cap.bodyVal, _ = b["value"].(string)
+			}
+			resp := map[string]any{
+				"id":        id,
+				"title":     cap.title,
+				"spaceId":   "space1",
+				"authorId":  "user1",
+				"createdAt": "2024-01-01T00:00:00Z",
+				"version":   map[string]any{"number": cap.version},
+				"_links":    map[string]any{"webui": "/spaces/T/pages/" + id + "/P"},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			t.Errorf("unexpected method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+}
+
+func TestPageUpdate_Conflict(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	server := pageUpdateServer(t, 8, "Cur", "<p>cur</p>", &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 7}
+	err := cmd.Run(c)
+
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Err != "version_conflict" || oErr.Code != output.ExitGeneral {
+		t.Errorf("got Err=%q Code=%d, want version_conflict/%d", oErr.Err, oErr.Code, output.ExitGeneral)
+	}
+	if cap.called {
+		t.Errorf("PUT should not be called on version conflict")
+	}
+}
+
+func TestPageUpdate_TitleOnlyPreservesBody(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	server := pageUpdateServer(t, 5, "Old Title", "<p>current</p>", &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "") // no body piped
+
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 5, Title: "New Title"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !cap.called {
+		t.Fatalf("PUT not called")
+	}
+	if cap.title != "New Title" {
+		t.Errorf("title sent = %q, want New Title", cap.title)
+	}
+	if cap.bodyRep != "storage" || cap.bodyVal != "<p>current</p>" {
+		t.Errorf("body sent = %q/%q, want storage/<p>current</p> (preserved)", cap.bodyRep, cap.bodyVal)
+	}
+	if cap.version != 6 {
+		t.Errorf("version sent = %d, want 6", cap.version)
+	}
+	lines := parseLines(t, out.String())
+	if lines[0]["previous_version"] != float64(5) || lines[0]["version"] != float64(6) {
+		t.Errorf("row versions unexpected: %v", lines[0])
+	}
+}
+
+func TestPageUpdate_BodyUpdate(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	server := pageUpdateServer(t, 5, "Old", "<p>current</p>", &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "<p>new body</p>")
+
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 5, BodyFormat: "storage"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if cap.bodyVal != "<p>new body</p>" {
+		t.Errorf("body sent = %q, want <p>new body</p>", cap.bodyVal)
+	}
+	// Title omitted -> preserved from current.
+	if cap.title != "Old" {
+		t.Errorf("title sent = %q, want Old (preserved)", cap.title)
+	}
+	lines := parseLines(t, out.String())
+	if lines[0]["previous_version"] != float64(5) {
+		t.Errorf("previous_version = %v, want 5", lines[0]["previous_version"])
+	}
+}
+
+// pageDeleteServer serves the dry-run GET and the DELETE, recording deleted ids.
+func pageDeleteServer(t *testing.T, notFound map[string]bool, deleted *[]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/wiki/api/v2/pages/"
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, prefix)
+		if notFound[id] {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write([]byte(`{
+				"id": "` + id + `",
+				"title": "Page ` + id + `",
+				"spaceId": "space1",
+				"authorId": "user1",
+				"createdAt": "2024-01-01T00:00:00Z",
+				"body": {"storage": {"value": "<p>x</p>"}},
+				"version": {"number": 3, "createdAt": "2024-06-20T00:00:00Z"},
+				"_links": {"webui": "/spaces/T/pages/` + id + `/P"}
+			}`))
+		case http.MethodDelete:
+			*deleted = append(*deleted, id)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+}
+
+func TestPageDelete_DryRun(t *testing.T) {
+	clearCredEnv(t)
+	var deleted []string
+	server := pageDeleteServer(t, nil, &deleted)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageDeleteCmd{Refs: []string{"1"}, DryRun: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if len(deleted) != 0 {
+		t.Errorf("dry-run should not DELETE, got %v", deleted)
+	}
+	lines := parseLines(t, out.String())
+	row := lines[0]
+	if row["would_delete"] != true || row["delete_mode"] != "trash" || row["id"] != "1" || row["version"] != float64(3) {
+		t.Errorf("dry-run row unexpected: %v", row)
+	}
+}
+
+func TestPageDelete_NoYes(t *testing.T) {
+	clearCredEnv(t)
+	var deleted []string
+	server := pageDeleteServer(t, nil, &deleted)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageDeleteCmd{Refs: []string{"1"}}
+	err := cmd.Run(c)
+
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Err != "confirmation_required" || oErr.Code != output.ExitGeneral {
+		t.Errorf("got Err=%q Code=%d, want confirmation_required/%d", oErr.Err, oErr.Code, output.ExitGeneral)
+	}
+	if len(deleted) != 0 {
+		t.Errorf("nothing should be deleted without --yes, got %v", deleted)
+	}
+}
+
+func TestPageDelete_WithYes(t *testing.T) {
+	clearCredEnv(t)
+	var deleted []string
+	server := pageDeleteServer(t, nil, &deleted)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageDeleteCmd{Refs: []string{"1", "2"}, Yes: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if len(deleted) != 2 {
+		t.Errorf("expected 2 DELETEs, got %v", deleted)
+	}
+	lines := parseLines(t, out.String())
+	if len(lines) != 3 {
+		t.Fatalf("expected 2 rows + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["deleted"] != true || lines[0]["delete_mode"] != "trash" || lines[0]["id"] != "1" {
+		t.Errorf("first deleted row unexpected: %v", lines[0])
+	}
+}
+
+func TestPageDelete_PerItem404(t *testing.T) {
+	clearCredEnv(t)
+	var deleted []string
+	server := pageDeleteServer(t, map[string]bool{"404": true}, &deleted)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageDeleteCmd{Refs: []string{"1", "404"}, Yes: true}
+	err := cmd.Run(c)
+
+	var exitErr *output.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	if exitErr.Code != output.ExitGeneral {
+		t.Errorf("exit code = %d, want %d", exitErr.Code, output.ExitGeneral)
+	}
+	lines := parseLines(t, out.String())
+	if len(lines) != 3 {
+		t.Fatalf("expected success row + error row + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["deleted"] != true || lines[0]["id"] != "1" {
+		t.Errorf("first row should be success: %v", lines[0])
+	}
+	if lines[1]["error"] != "page_not_found" || lines[1]["input"] != "404" {
+		t.Errorf("second row should be inline 404 error: %v", lines[1])
+	}
+	meta := lines[2]["_meta"].(map[string]any)
+	if meta["error_count"] != float64(1) {
+		t.Errorf("error_count = %v, want 1", meta["error_count"])
 	}
 }
