@@ -237,3 +237,111 @@ func TestAttachmentDownload_URLRejected(t *testing.T) {
 		t.Errorf("got Err=%q Code=%d, want invalid_input/%d", oErr.Err, oErr.Code, output.ExitGeneral)
 	}
 }
+
+// attachmentUploadServer serves PUT /wiki/rest/api/content/{id}/child/attachment
+// and records the last method+path it saw so tests can assert the endpoint.
+func attachmentUploadServer(t *testing.T, gotMethod, gotPath *string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*gotMethod = r.Method
+		*gotPath = r.URL.Path
+		if !strings.HasSuffix(r.URL.Path, "/child/attachment") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = r.ParseMultipartForm(1 << 20)
+		_, hdr, err := r.FormFile("file")
+		if err != nil {
+			t.Errorf("FormFile: %v", err)
+		}
+		name := "upload.txt"
+		if hdr != nil {
+			name = hdr.Filename
+		}
+		_, _ = w.Write([]byte(`{"results":[{"id":"att-new","title":"` + name + `","extensions":{"mediaType":"text/plain"},"_links":{"download":"/download/attachments/123/` + name + `"}}]}`))
+	}))
+}
+
+func TestAttachmentUpload_File(t *testing.T) {
+	clearCredEnv(t)
+	var gotMethod, gotPath string
+	server := attachmentUploadServer(t, &gotMethod, &gotPath)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	fp := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(fp, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &AttachmentUploadCmd{Page: "123", Files: []string{fp}}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", gotMethod)
+	}
+	if gotPath != "/wiki/rest/api/content/123/child/attachment" {
+		t.Errorf("path = %q, want /wiki/rest/api/content/123/child/attachment", gotPath)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 row + meta, got %d: %q", len(lines), out.String())
+	}
+	row := lines[0]
+	if row["attachment_id"] != "att-new" || row["title"] != "notes.txt" || row["media_type"] != "text/plain" {
+		t.Errorf("row shape unexpected: %v", row)
+	}
+	if row["input"] != fp || row["page_id"] != "123" || row["uploaded"] != true {
+		t.Errorf("row fields unexpected: %v", row)
+	}
+}
+
+func TestAttachmentUpload_MissingFile(t *testing.T) {
+	clearCredEnv(t)
+	var gotMethod, gotPath string
+	server := attachmentUploadServer(t, &gotMethod, &gotPath)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	missing := filepath.Join(t.TempDir(), "nope.txt")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &AttachmentUploadCmd{Page: "123", Files: []string{missing}}
+	err := cmd.Run(c)
+
+	var exitErr *output.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != output.ExitGeneral {
+		t.Fatalf("expected *output.ExitError/%d, got %T: %v", output.ExitGeneral, err, err)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 error row + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["input"] != missing || lines[0]["error"] == nil {
+		t.Errorf("error row unexpected: %v", lines[0])
+	}
+	meta := lines[1]["_meta"].(map[string]any)
+	if ec, _ := meta["error_count"].(float64); ec != 1 {
+		t.Errorf("error_count = %v, want 1", meta["error_count"])
+	}
+}

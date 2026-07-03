@@ -12,6 +12,7 @@ import (
 type AttachmentCmd struct {
 	List     AttachmentListCmd     `cmd:"" help:"List a page's attachments."`
 	Download AttachmentDownloadCmd `cmd:"" help:"Download an attachment to a file."`
+	Upload   AttachmentUploadCmd   `cmd:"" help:"Upload files as attachments to a page."`
 }
 
 type AttachmentListCmd struct {
@@ -89,6 +90,66 @@ func (c *AttachmentListCmd) resolvePage(cli *CLI) (siteHint, pageID string, err 
 	}
 
 	return ref.BaseURL, ref.PageID, nil
+}
+
+// AttachmentUploadCmd uploads one or more local files as attachments to a page.
+// Each file is uploaded independently; a failure on one (including a file that
+// can't be opened) is reported inline and does not abort the rest.
+type AttachmentUploadCmd struct {
+	Page  string   `arg:"" name:"id-or-url" help:"Page ID or URL."`
+	Files []string `arg:"" name:"file" help:"Local file(s) to upload."`
+}
+
+func (c *AttachmentUploadCmd) Run(cli *CLI) error {
+	siteHint, pageID, err := resolvePageRef(cli, c.Page)
+	if err != nil {
+		return err
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	p := cli.NewPrinter()
+	errCount := 0
+	for _, file := range c.Files {
+		// File-open failures come back as plain errors; ClassifyError falls
+		// through to a generic code, which is fine. Input is set to the file so
+		// the caller can tell which upload failed.
+		att, err := client.UploadAttachment(ctx, pageID, file)
+		if err != nil {
+			oErr := cli.ClassifyError(err)
+			oErr.Input = file
+			if err := p.PrintItem(oErr.AsItem()); err != nil {
+				return err
+			}
+			errCount++
+			continue
+		}
+		row := map[string]any{
+			"input":         file,
+			"page_id":       pageID,
+			"attachment_id": att.ID,
+			"title":         att.Title,
+			"media_type":    att.MediaType,
+			"uploaded":      true,
+		}
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+	}
+
+	if err := p.PrintMeta(output.Meta{ErrorCount: errCount}); err != nil {
+		return err
+	}
+	if errCount > 0 {
+		return &output.ExitError{Code: output.ExitGeneral}
+	}
+	return nil
 }
 
 type AttachmentDownloadCmd struct {
