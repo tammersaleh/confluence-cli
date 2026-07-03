@@ -277,6 +277,47 @@ Carry these into Phase 1, when the domain client is broadened:
   reporter lands - emit per-item events and a completeness-aware summary rather
   than an unconditional truthy row.
 
+## Phase 1 design decisions (settled with Codex)
+
+Branch `phase-1-page`. Build order (each TDD, own commit):
+
+1. `internal/confluenceurl` - pure parser. Tri-state `Parse` into site/space/page
+   refs; canonical site extraction; page-ID and space-key extraction; mixed-site
+   detection across multiple inputs. Locks the one-site-per-invocation rule.
+2. Transport cleanup in `internal/confluence`: `doRequest` returns a typed
+   `StatusError{StatusCode, Endpoint, Err}`; add `ErrNotFound`; exhausted 429 ->
+   `*httpx.RateLimitError`; emit tracer events in `doRequest`/`DownloadAttachment`
+   (this also clears the deferred Phase 0 follow-ups: `--trace`, exit 3).
+3. Domain page primitives: `ListPages(ctx, spaceID, cursor, limit) ([]Page,
+   next, err)` - one API page, cursor passthrough (Link header or `_links.next`),
+   decode `parentId`/`parentType` if present but no N+1/backfill; `GetPage(ctx,
+   id, APIBodyFormat) (*PageDetail, err)` with a NEW `PageDetail` type (do not
+   overload `PageContent`; ADF is JSON). `APIBodyFormat` = storage /
+   atlas_doc_format / view. Keep `GetPages` crawl and `GetPageContent` unchanged.
+4. CLI helpers: `cli.ClassifyError` maps `ErrPageNotFound`/`ErrAttachmentNotFound`
+   and preserves `StatusError.Endpoint`; reorder so typed transport errors win
+   over wrapped sentinels; site resolution (URL vs `--site` vs single default);
+   mixed-site rejection; site-parameterized client builder.
+5. `auth login --site <url> --email <e>` - token from stdin/prompt (never argv),
+   canonicalize site, VALIDATE via `GET /wiki/rest/api/user/current` before
+   saving, atomic write, no save on failure.
+6. `auth status` (succeeds with zero sites; lists stored sites + env presence +
+   which source wins) and `auth logout <site>` (explicit; env still authes after).
+7. `page list --space <key|url>` `--limit` (API page size) `--cursor` `--all`.
+8. `page get <id|url>...` `--body-format storage|atlas_doc_format|view` (alias
+   `adf` -> atlas_doc_format). `body` is `any` (ADF emitted as a JSON object).
+   Fatal: mixed sites / `--site` mismatch / no site. Per-item: page_not_found,
+   forbidden -> inline rows + `_meta.error_count`.
+9. `page get --body-format markdown` - derived (convert storage), emit
+   `body_format:"markdown"` + `source_body_format:"storage"`; add a converter
+   attachment resolver so images/links resolve to remote absolute URLs (one
+   extra attachments fetch in markdown mode). markdown stays out of the domain
+   enum.
+
+404 maps by the endpoint hit, not the command: GetSpace and ListPages (space
+collection) -> space_not_found; GetPage -> page_not_found; GetAttachments(pageID)
+-> page_not_found; attachments/{id} -> attachment_not_found.
+
 ## Open questions
 
 - Confluence has no aggressive rate-limit culture like Slack; keep the retry/
