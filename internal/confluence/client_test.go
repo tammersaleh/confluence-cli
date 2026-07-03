@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tammersaleh/confluence-sync/internal/httpx"
+	"github.com/tammersaleh/confluence-sync/internal/output"
 )
 
 func TestClient_GetSpace(t *testing.T) {
@@ -927,6 +928,146 @@ func TestClient_RateLimitExhaustion(t *testing.T) {
 	}
 	if calls != maxRetries+1 {
 		t.Errorf("server calls = %d, want %d", calls, maxRetries+1)
+	}
+}
+
+func TestClient_ServerErrorExhaustion(t *testing.T) {
+	// 5xx exhaustion must NOT surface as a rate-limit error. It wraps the last
+	// *StatusError (500 / ErrAPIError) via the "after N retries: %w" path.
+	old := baseRetryDelay
+	baseRetryDelay = time.Millisecond
+	defer func() { baseRetryDelay = old }()
+
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetSpace(context.Background(), "ENG")
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var rl *httpx.RateLimitError
+	if errors.As(err, &rl) {
+		t.Fatalf("5xx exhaustion must not be a *httpx.RateLimitError, got %v", err)
+	}
+	if !errors.Is(err, ErrAPIError) {
+		t.Errorf("expected error to wrap ErrAPIError, got %v", err)
+	}
+	var se *StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected wrapped *StatusError, got %T: %v", err, err)
+	}
+	if se.StatusCode != http.StatusInternalServerError {
+		t.Errorf("StatusCode = %d, want 500", se.StatusCode)
+	}
+	if calls != maxRetries+1 {
+		t.Errorf("server calls = %d, want %d", calls, maxRetries+1)
+	}
+}
+
+func TestClient_NetworkErrorExhaustion(t *testing.T) {
+	// A dead server (closed before the call) makes every attempt fail at the
+	// transport layer. The exhausted error wraps a *url.Error, which
+	// ClassifyError must map to ExitNetwork.
+	old := baseRetryDelay
+	baseRetryDelay = time.Millisecond
+	defer func() { baseRetryDelay = old }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := server.URL
+	server.Close() // nothing is listening now
+
+	c := NewClient(deadURL, "test@example.com", "api-token")
+	_, err := c.GetSpace(context.Background(), "ENG")
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var rl *httpx.RateLimitError
+	if errors.As(err, &rl) {
+		t.Fatalf("network exhaustion must not be a *httpx.RateLimitError, got %v", err)
+	}
+	classified := httpx.ClassifyError(err)
+	if classified.Code != output.ExitNetwork {
+		t.Errorf("ClassifyError code = %d, want ExitNetwork (%d); err=%v", classified.Code, output.ExitNetwork, err)
+	}
+}
+
+func TestClient_RetrySucceedsAfterTransientFailure(t *testing.T) {
+	// 503 on the first attempt, 200 with a valid body on the second. The call
+	// must recover and return the decoded result.
+	old := baseRetryDelay
+	baseRetryDelay = time.Millisecond
+	defer func() { baseRetryDelay = old }()
+
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte(`{"results": [{"id": "12345", "key": "ENG", "name": "Engineering"}]}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	space, err := c.GetSpace(context.Background(), "ENG")
+	if err != nil {
+		t.Fatalf("GetSpace() unexpected error: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("server calls = %d, want 2 (one failure, one success)", calls)
+	}
+	if space == nil || space.ID != "12345" || space.Key != "ENG" || space.Name != "Engineering" {
+		t.Errorf("space = %+v, want ID=12345 Key=ENG Name=Engineering", space)
+	}
+}
+
+func TestClient_ListPages_LinkHeaderWinsOverBody(t *testing.T) {
+	// When both a rel="next" Link header and a body _links.next are present with
+	// different cursors, the header cursor wins.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", `<https://x/wiki/api/v2/spaces/S/pages?cursor=HDR>; rel="next"`)
+		w.Write([]byte(`{
+			"results": [{"id": "1", "title": "Page One"}],
+			"_links": {"next": "/wiki/api/v2/spaces/12345/pages?cursor=BODY"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, nextCursor, err := c.ListPages(context.Background(), "12345", "", 25)
+	if err != nil {
+		t.Fatalf("ListPages() error: %v", err)
+	}
+	if nextCursor != "HDR" {
+		t.Errorf("nextCursor = %q, want HDR (header precedence)", nextCursor)
+	}
+}
+
+func TestClient_ListPages_BodyCursorWhenNoLinkHeader(t *testing.T) {
+	// With no Link header, the body's _links.next cursor is used.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{
+			"results": [{"id": "1", "title": "Page One"}],
+			"_links": {"next": "/wiki/api/v2/spaces/12345/pages?cursor=BODY"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, nextCursor, err := c.ListPages(context.Background(), "12345", "", 25)
+	if err != nil {
+		t.Fatalf("ListPages() error: %v", err)
+	}
+	if nextCursor != "BODY" {
+		t.Errorf("nextCursor = %q, want BODY", nextCursor)
 	}
 }
 
