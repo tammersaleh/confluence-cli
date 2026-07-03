@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `auth`, `page list`, `page get`, `attachment list`, and `attachment download` commands ship today (see "Commands available now"); everything under "Planned commands" is designed but not yet implemented.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `attachment list`, and `attachment download` commands ship today (see "Commands available now"); everything under "Planned commands" is designed but not yet implemented.
 
 ## Design principles
 
@@ -91,7 +91,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `space info`, `auth`, `page list`, `page get`, `attachment list`, and `attachment download` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `attachment list`, and `attachment download` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### version
 
@@ -143,6 +143,27 @@ $ confluence space info ENG 99999
 {"input":"ENG","id":"98765","key":"ENG","name":"Engineering","type":"global","status":"current","homepage_id":"123400"}
 {"input":"99999","error":"space_not_found","detail":"No space with id '99999'","hint":"confluence space info ENG"}
 {"_meta":{"has_more":false,"error_count":1}}
+```
+
+### space list
+
+```text
+confluence space list [--limit <n>] [--cursor <c>] [--all]
+```
+
+List spaces accessible to the authenticated user. This is site-wide: the site comes from `--site` or the single stored default, since there is no URL argument to derive it from. One object per space, then the trailer.
+
+- `--limit` - page size requested from the API (default 25).
+- `--cursor` - opaque cursor from a prior `_meta.next_cursor`, to fetch the next page.
+- `--all` - loop until the cursor is exhausted, emitting every space. The trailer omits `next_cursor` since nothing remains.
+
+Each row carries `id`, `key`, `name`, `type`, `status`, and `homepage_id`.
+
+```jsonl
+$ confluence space list
+{"id":"98765","key":"ENG","name":"Engineering","type":"global","status":"current","homepage_id":"123400"}
+{"id":"98766","key":"DESIGN","name":"Design","type":"global","status":"current","homepage_id":"223400"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
 ```
 
 ### auth
@@ -232,6 +253,62 @@ $ confluence page get 123456 99999 --body-format markdown
 {"_meta":{"has_more":false,"error_count":1}}
 ```
 
+### page children
+
+```text
+confluence page children <id|url> [--limit <n>] [--cursor <c>] [--all]
+```
+
+List a page's direct children. The argument is a numeric page id or a page URL; a URL selects the site. One object per child, then the trailer.
+
+- `--limit` - page size requested from the API (default 25).
+- `--cursor` - opaque cursor from a prior `_meta.next_cursor`, to fetch the next page.
+- `--all` - loop until the cursor is exhausted, emitting every child. The trailer omits `next_cursor` since nothing remains.
+
+Each row carries `id`, `title`, and `type`.
+
+```jsonl
+$ confluence page children 123400
+{"id":"123456","title":"API Design","type":"page"}
+{"id":"123457","title":"Database Schema","type":"page"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### page ancestors
+
+```text
+confluence page ancestors <id|url>
+```
+
+List a page's ancestor chain, root-most first. The argument is a numeric page id or a page URL. This endpoint is not paginated. Each row carries `id` and `type`; the Confluence ancestors endpoint returns limited fields, so `title` is omitted.
+
+```jsonl
+$ confluence page ancestors 123456
+{"id":"123400","type":"page"}
+{"id":"123410","type":"page"}
+{"_meta":{"has_more":false}}
+```
+
+### page tree
+
+```text
+confluence page tree --space <key|url>
+```
+
+Print a space's page hierarchy in depth-first order. `--space` takes a bare space key or a space/page URL; a URL selects the site. One object per page, then the trailer.
+
+Ordering is by page ID, not Confluence display order. The v2 API doesn't expose display order in the crawl, so siblings are sorted by ID for deterministic output; do not rely on this matching the order shown in the Confluence UI.
+
+Each row carries `id`, `title`, `type`, and `depth` (0 for roots); `parent_id` appears when the page has a parent within the space.
+
+```jsonl
+$ confluence page tree --space ENG
+{"id":"123400","title":"Architecture","type":"page","depth":0}
+{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400"}
+{"id":"123457","title":"Database Schema","type":"page","depth":1,"parent_id":"123400"}
+{"_meta":{"has_more":false}}
+```
+
 ### attachment list
 
 ```text
@@ -263,16 +340,6 @@ $ confluence attachment download att987 -o ./diagram.png
 ## Planned commands (not yet implemented)
 
 Everything below is designed but not built. Do not invoke these yet; they are documented so the surface is settled before implementation. They land across phases (`page` first, then attachments/space, then the wider read surface, then writes).
-
-### Page (read)
-
-- `confluence page children <id|url>` - direct children of a page. Not yet available.
-- `confluence page ancestors <id|url>` - ancestor chain of a page. Not yet available.
-- `confluence page tree --space <key|url>` - hierarchical page tree, pending acceptable ordering semantics. Not yet available.
-
-### Space (read)
-
-- `confluence space list` - list accessible spaces. Not yet available.
 
 ### Attachment
 

@@ -4,12 +4,12 @@ An agent-first Confluence CLI. The binary is `confluence`; the repository and Go
 module stay `confluence-sync`. Output is JSONL (one JSON object per line);
 commands are non-interactive and scriptable, built for LLM agents and CI.
 
-The `version`, `space sync`, `space info`, `auth`, `page list`, `page get`,
-`attachment list`, and `attachment download` commands ship today. A wider
-read/write surface (more page reads, space list, attachment upload, search,
-comments, labels, users, and authoring) is designed but not yet implemented. See
-`SPEC.md` for the full contract and planned commands, and
-`skills/confluence-cli/SKILL.md` for the agent skill.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`,
+`page get`, `page children`, `page ancestors`, `page tree`, `attachment list`,
+and `attachment download` commands ship today. A wider read/write surface
+(attachment upload, search, comments, labels, users, and authoring) is designed
+but not yet implemented. See `SPEC.md` for the full contract and planned
+commands, and `skills/confluence-cli/SKILL.md` for the agent skill.
 
 ## Installation
 
@@ -131,6 +131,23 @@ confluence space info ENG DESIGN 98765
 Unknown keys or spaces you can't read appear inline on stdout and bump
 `_meta.error_count`.
 
+### space list
+
+List spaces accessible to the authenticated user. This is site-wide: the site
+comes from `--site` or the single stored default. Page through with
+`--limit`/`--cursor`, or fetch everything with `--all`. Rows carry `id`, `key`,
+`name`, `type`, `status`, and `homepage_id`.
+
+```bash
+confluence space list
+confluence space list --all
+```
+
+```jsonl
+{"id":"98765","key":"ENG","name":"Engineering","type":"global","status":"current","homepage_id":"123400"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
 ### page list
 
 List pages in a space. `--space` takes a bare key or a space/page URL. Use
@@ -166,6 +183,58 @@ confluence page get 123456 --body-format markdown
 
 Bad ids or pages you can't read appear inline on stdout and bump
 `_meta.error_count`.
+
+### page children
+
+List a page's direct children. The argument is a numeric page id or a page URL.
+Page through with `--limit`/`--cursor`, or fetch everything with `--all`. Rows
+carry `id`, `title`, and `type`.
+
+```bash
+confluence page children 123400
+confluence page children 123400 --all
+```
+
+```jsonl
+{"id":"123456","title":"API Design","type":"page"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### page ancestors
+
+List a page's ancestor chain, root-most first. The argument is a numeric page id
+or a page URL. Not paginated. Rows carry `id` and `type`; the Confluence
+ancestors endpoint omits `title`.
+
+```bash
+confluence page ancestors 123456
+```
+
+```jsonl
+{"id":"123400","type":"page"}
+{"id":"123410","type":"page"}
+{"_meta":{"has_more":false}}
+```
+
+### page tree
+
+Print a space's page hierarchy in depth-first order. `--space` takes a bare space
+key or a space/page URL. Rows carry `id`, `title`, `type`, and `depth` (0 for
+roots); `parent_id` appears when the page has a parent within the space.
+
+Ordering is by page ID, not Confluence display order. The v2 API doesn't expose
+display order in the crawl, so siblings are sorted by ID for deterministic
+output. Don't expect it to match the order in the Confluence UI.
+
+```bash
+confluence page tree --space ENG
+```
+
+```jsonl
+{"id":"123400","title":"Architecture","type":"page","depth":0}
+{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400"}
+{"_meta":{"has_more":false}}
+```
 
 ### attachment list
 

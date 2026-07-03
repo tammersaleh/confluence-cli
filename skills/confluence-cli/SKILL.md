@@ -1,6 +1,6 @@
 ---
 name: confluence-cli
-description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get), inspect spaces (space info), and read/download attachments, with the wider read/write surface arriving in later releases"
+description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), inspect spaces (space info/list), and read/download attachments, with the wider read/write surface arriving in later releases"
 argument-hint: ""
 allowed-tools:
   - Bash(confluence *)
@@ -11,7 +11,8 @@ allowed-tools:
 Agent-first CLI for Confluence. JSONL output (one JSON object per line). Every
 command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 
-Today the `version`, `space sync`, `space info`, `auth`, `page list`, `page get`,
+Today the `version`, `space sync`, `space info`, `space list`, `auth`,
+`page list`, `page get`, `page children`, `page ancestors`, `page tree`,
 `attachment list`, and `attachment download` commands ship. The wider read/write
 surface below is planned but not yet implemented - do not invoke it.
 
@@ -119,6 +120,22 @@ confluence space info ENG DESIGN 98765
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 
+### space list
+
+List spaces on the site (from `--site` or the single stored default; no URL arg).
+Page with `--limit`/`--cursor`, or drain with `--all`. Rows carry `id`, `key`,
+`name`, `type`, `status`, `homepage_id`.
+
+```bash
+confluence space list
+confluence space list --all
+```
+
+```jsonl
+{"id":"98765","key":"ENG","name":"Engineering","type":"global","status":"current","homepage_id":"123400"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
 ### page list
 
 List pages in a space. `--space` is a bare key or a space/page URL. Page through
@@ -157,6 +174,55 @@ confluence page get https://acme.atlassian.net/wiki/spaces/ENG/pages/123456 --bo
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 
+### page children
+
+Direct children of a page (numeric id or page URL). Page with
+`--limit`/`--cursor`, or drain with `--all`. Rows carry `id`, `title`, `type`.
+
+```bash
+confluence page children 123400
+confluence page children 123400 --all
+```
+
+```jsonl
+{"id":"123456","title":"API Design","type":"page"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### page ancestors
+
+Ancestor chain of a page, root-most first (numeric id or page URL). Not
+paginated. Rows carry `id` and `type`; the endpoint omits `title`.
+
+```bash
+confluence page ancestors 123456
+```
+
+```jsonl
+{"id":"123400","type":"page"}
+{"id":"123410","type":"page"}
+{"_meta":{"has_more":false}}
+```
+
+### page tree
+
+Space page hierarchy in depth-first order. `--space` is a bare key or a
+space/page URL. Rows carry `id`, `title`, `type`, `depth` (0 for roots), and
+`parent_id` when the page has a parent within the space.
+
+Ordering is by page ID, not Confluence display order - the v2 API doesn't expose
+display order in the crawl, so siblings sort by ID for deterministic output.
+
+```bash
+confluence page tree --space ENG
+```
+
+```jsonl
+{"id":"123400","title":"Architecture","type":"page","depth":0}
+{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400"}
+{"_meta":{"has_more":false}}
+```
+
 ### attachment list
 
 List a page's attachments. The argument is a numeric page id or page URL. Rows
@@ -190,8 +256,6 @@ confluence attachment download att987 --out ./diagram.png
 
 Designed but not implemented. Do not run these yet:
 
-- `confluence page children|ancestors|tree` - read page hierarchy.
-- `confluence space list` - list accessible spaces.
 - `confluence attachment upload` - upload files to a page.
 - `confluence search <cql>` - CQL search.
 - `confluence comment list|add` - footer and inline comments.
