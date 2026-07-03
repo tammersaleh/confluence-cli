@@ -633,6 +633,130 @@ func TestPageGet_MarkdownNoAttachments(t *testing.T) {
 	}
 }
 
+func TestPageGet_SiteFlagMismatch(t *testing.T) {
+	clearCredEnv(t)
+	var out, errBuf bytes.Buffer
+	c := &CLI{Site: "https://other.atlassian.net"}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &PageGetCmd{Refs: []string{"https://acme.atlassian.net/wiki/spaces/ENG/pages/123"}, BodyFormat: "storage"}
+	err := cmd.Run(c)
+
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Err != "invalid_input" || oErr.Code != output.ExitGeneral {
+		t.Errorf("got Err=%q Code=%d, want invalid_input/%d", oErr.Err, oErr.Code, output.ExitGeneral)
+	}
+}
+
+func TestPageGet_MarkdownAttachmentsError(t *testing.T) {
+	clearCredEnv(t)
+	// The page (storage) fetch succeeds, but listing attachments fails. markdown
+	// mode treats that as a per-item error that continues the batch.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/wiki/api/v2/pages/"
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		rest := strings.TrimPrefix(r.URL.Path, prefix)
+		if strings.HasSuffix(rest, "/attachments") {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		id := rest
+		_, _ = w.Write([]byte(`{
+			"id": "` + id + `",
+			"title": "Page ` + id + `",
+			"spaceId": "space1",
+			"authorId": "user456",
+			"createdAt": "2024-01-15T10:30:00.000Z",
+			"body": {"storage": {"value": "<p>Hello</p>"}},
+			"version": {"number": 5, "createdAt": "2024-06-20T14:45:00.000Z"},
+			"_links": {"webui": "/spaces/TEST/pages/` + id + `/Page"}
+		}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123"}, BodyFormat: "markdown"}
+	err := cmd.Run(c)
+
+	var exitErr *output.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	if exitErr.Code != output.ExitGeneral {
+		t.Errorf("exit code = %d, want %d", exitErr.Code, output.ExitGeneral)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected error row + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["error"] == nil || lines[0]["input"] != "123" {
+		t.Errorf("first row should be inline error for 123: %v", lines[0])
+	}
+	meta := lines[1]["_meta"].(map[string]any)
+	if meta["error_count"] != float64(1) {
+		t.Errorf("error_count = %v, want 1", meta["error_count"])
+	}
+}
+
+func TestPageGet_PerItemForbidden(t *testing.T) {
+	clearCredEnv(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/wiki/api/v2/pages/"
+		if !strings.HasPrefix(r.URL.Path, prefix) {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123"}, BodyFormat: "storage"}
+	err := cmd.Run(c)
+
+	var exitErr *output.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	if exitErr.Code != output.ExitGeneral {
+		t.Errorf("exit code = %d, want %d", exitErr.Code, output.ExitGeneral)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected error row + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["error"] != "forbidden" || lines[0]["input"] != "123" {
+		t.Errorf("first row should be inline forbidden error for 123: %v", lines[0])
+	}
+	meta := lines[1]["_meta"].(map[string]any)
+	if meta["error_count"] != float64(1) {
+		t.Errorf("error_count = %v, want 1", meta["error_count"])
+	}
+}
+
 func TestPageList_SiteFlagMismatch(t *testing.T) {
 	clearCredEnv(t)
 	var out, errBuf bytes.Buffer
