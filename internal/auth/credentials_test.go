@@ -252,6 +252,19 @@ func TestResolveCredentialsNoCredentials(t *testing.T) {
 	}
 }
 
+func TestResolveCredentialsEnvCredsNoSite(t *testing.T) {
+	clearEnv(t)
+	// Full env credentials but no site anywhere (no arg, no *_SITE, no store).
+	t.Setenv("CONFLUENCE_EMAIL", "env@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "env-tok")
+
+	path := filepath.Join(t.TempDir(), "none.json")
+	_, err := ResolveCredentials(path, "")
+	if err == nil {
+		t.Fatal("want error when credentials are present but no site is selected")
+	}
+}
+
 func TestResolveCredentialsIncomplete(t *testing.T) {
 	clearEnv(t)
 	// Stored entry has email but no token.

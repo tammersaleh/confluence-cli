@@ -157,6 +157,10 @@ func ResolveCredentials(path string, site string) (*ResolvedCredentials, error) 
 		}
 	}
 
+	if finalSite == "" {
+		return nil, errors.New("no site selected; pass a site URL, set --site, or CONFLUENCE_SITE")
+	}
+
 	email := firstNonEmpty(envEmail, stored.Email)
 	token := firstNonEmpty(envToken, stored.APIToken)
 	if email == "" || token == "" {
