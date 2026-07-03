@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. Only two commands ship today (see "Commands available now"); everything under "Planned commands" is designed but not yet implemented.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, and `auth` commands ship today (see "Commands available now"); everything under "Planned commands" is designed but not yet implemented.
 
 ## Design principles
 
@@ -91,7 +91,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-Two commands ship today. Both honor `--quiet` and `--timeout`.
+The `version`, `space sync`, and `auth` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### version
 
@@ -128,15 +128,43 @@ $ confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs --
 {"_meta":{"has_more":false}}
 ```
 
+### auth
+
+Manage stored credentials at `~/.config/confluence-cli/credentials.json`, keyed by canonical site base URL.
+
+```text
+confluence auth login --site <url> --email <email>
+confluence auth status
+confluence auth logout [<site>]
+```
+
+`auth login` reads the API token from stdin (never argv), validates it against the site, and only then saves it under the canonical site URL.
+
+```jsonl
+$ printf '%s' "$TOKEN" | confluence auth login --site https://acme.atlassian.net --email you@example.com
+{"status":"logged_in","site":"https://acme.atlassian.net","account_id":"a1"}
+{"_meta":{"has_more":false}}
+```
+
+`auth status` lists configured sites and any active env override, without printing secrets.
+
+```jsonl
+$ confluence auth status
+{"site":"https://acme.atlassian.net","source":"stored","is_default":true}
+{"_meta":{"has_more":false}}
+```
+
+`auth logout` removes the stored credentials for a site. The `<site>` positional is optional when exactly one site is configured.
+
+```jsonl
+$ confluence auth logout https://acme.atlassian.net
+{"status":"logged_out","site":"https://acme.atlassian.net"}
+{"_meta":{"has_more":false}}
+```
+
 ## Planned commands (not yet implemented)
 
-Everything below is designed but not built. Do not invoke these yet; they are documented so the surface is settled before implementation. They land across phases (auth and `page` first, then attachments/space, then the wider read surface, then writes).
-
-### Auth
-
-- `confluence auth login --site <url> --email <e>` - store credentials (token via prompt/stdin, never argv). Not yet available.
-- `confluence auth status` - report the active site and credential source. Not yet available.
-- `confluence auth logout` - remove stored credentials for a site. Not yet available.
+Everything below is designed but not built. Do not invoke these yet; they are documented so the surface is settled before implementation. They land across phases (`page` first, then attachments/space, then the wider read surface, then writes).
 
 ### Page (read)
 

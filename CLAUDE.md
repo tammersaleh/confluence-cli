@@ -6,8 +6,8 @@ one JSON object per line; commands are non-interactive and scriptable. Built on
 Kong. Auth is an API token + email over HTTP Basic.
 
 `SPEC.md` is the source of truth for the full command surface and output
-contract. Only two commands ship today (`version`, `space sync`); the rest is
-designed but not implemented. See `README.md` for user-facing usage and
+contract. The `version`, `space sync`, and `auth` commands ship today; the rest
+is designed but not implemented. See `README.md` for user-facing usage and
 `skills/confluence-cli/SKILL.md` for the agent-facing skill.
 
 ## Architecture
@@ -19,6 +19,7 @@ internal/
     root.go                    CLI struct + global flags, Context(), NewPrinter, ResolveCredentials, ClassifyError.
     version.go                 `version` command.
     space.go                   `space sync` command (wraps the sync engine).
+    auth.go                    `auth login|status|logout` commands.
   output/
     output.go                  Printer (JSONL rows + _meta trailer), Meta, Error, ExitError, exit codes, field filtering.
     errors.go                  Error.AsItem for inline per-item errors.
@@ -101,14 +102,17 @@ old Cobra tool's `1 = config / 2 = auth / 3 = api / 4 = filesystem` codes
 
 ## Commands
 
-Two commands ship today. Both honor `--quiet` and `--timeout`.
+The `version`, `space sync`, and `auth` commands ship today. All honor `--quiet` and `--timeout`.
 
 - `confluence version` - emits the build version, then the trailer.
 - `confluence space sync <space-url> <output-dir>` - one-way space crawl to local Markdown. Flags: `--prune`, `--dry-run`, `--quiet`, `--timeout`, `--trace`. Progress goes to stderr; stdout carries a single summary object then the trailer.
+- `confluence auth login --site <url> --email <email>` - read the API token from stdin, validate it, and store it under the canonical site URL. Token never comes from argv.
+- `confluence auth status` - list configured sites and any active env override, without printing secrets.
+- `confluence auth logout [<site>]` - remove stored credentials for a site. The `<site>` positional is optional when exactly one site is configured.
 
-The rest of the surface (`auth`, `page`, `attachment`, `search`, `comment`,
-`label`, `user`, and the write commands) is designed but not yet implemented.
-See `SPEC.md`.
+The rest of the surface (`page`, `attachment`, `search`, `comment`, `label`,
+`user`, and the write commands) is designed but not yet implemented. See
+`SPEC.md`.
 
 ### Global flags
 
@@ -126,14 +130,14 @@ and CI use.
 Credentials live at `~/.config/confluence-cli/credentials.json`, keyed by
 canonical site base URL. Precedence, highest first:
 
-1. Flags (`--site`, and the credential set via `auth login` once it lands).
+1. Flags (`--site`, and the credential set via `auth login`).
 2. `CONFLUENCE_SITE` / `CONFLUENCE_EMAIL` / `CONFLUENCE_API_TOKEN`.
 3. `ATLASSIAN_SITE` / `ATLASSIAN_API_EMAIL` / `ATLASSIAN_API_KEY` (compat aliases).
 4. Stored credentials.
 
 Site selection derives the target from a URL argument when present; else
-`--site`; else the single configured default. `confluence auth login` is planned
-but not yet available, so set env vars for now.
+`--site`; else the single configured default. Use `confluence auth login` to
+store credentials, or set env vars.
 
 ## Testing
 

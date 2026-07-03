@@ -11,7 +11,7 @@ allowed-tools:
 Agent-first CLI for Confluence. JSONL output (one JSON object per line). Every
 command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 
-Today only two commands ship: `version` and `space sync`. The wider read/write
+Today the `version`, `space sync`, and `auth` commands ship. The wider read/write
 surface below is planned but not yet implemented - do not invoke it.
 
 ## Prerequisites
@@ -32,12 +32,35 @@ Authenticate with an API token + email over environment variables:
 - `CONFLUENCE_API_TOKEN` - API token.
 
 `ATLASSIAN_SITE` / `ATLASSIAN_API_EMAIL` / `ATLASSIAN_API_KEY` work as
-compatibility aliases. The `confluence auth login` subcommand is planned but not
-yet available, so set the env vars for now.
+compatibility aliases. Or store credentials with `confluence auth login` (see
+below); the token is piped on stdin, validated, then saved.
 
 ## Commands available now
 
-Both honor `--quiet` and `--timeout`.
+All honor `--quiet` and `--timeout`.
+
+### auth
+
+Store credentials keyed by canonical site URL. The token is read from stdin,
+never argv.
+
+```bash
+printf '%s' "$TOKEN" | confluence auth login --site https://acme.atlassian.net --email you@example.com
+```
+
+```jsonl
+{"status":"logged_in","site":"https://acme.atlassian.net","account_id":"a1"}
+{"_meta":{"has_more":false}}
+```
+
+`auth status` lists configured sites and any active env override without printing
+secrets. `auth logout [<site>]` removes a site; the positional is optional when
+only one is configured.
+
+```bash
+confluence auth status
+confluence auth logout https://acme.atlassian.net
+```
 
 ### version
 
@@ -82,7 +105,6 @@ confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs --dr
 
 Designed but not implemented. Do not run these yet:
 
-- `confluence auth login|status|logout` - credential management.
 - `confluence page get|list|children|ancestors|tree` - read pages and hierarchy.
 - `confluence space list|info` - list and inspect spaces.
 - `confluence attachment list|download|upload` - attachments.

@@ -4,9 +4,9 @@ An agent-first Confluence CLI. The binary is `confluence`; the repository and Go
 module stay `confluence-sync`. Output is JSONL (one JSON object per line);
 commands are non-interactive and scriptable, built for LLM agents and CI.
 
-Two commands ship today: `version` and `space sync`. A wider read/write surface
-(pages, attachments, search, comments, labels, users, and authoring) is designed
-but not yet implemented. See `SPEC.md` for the full contract and planned
+The `version`, `space sync`, and `auth` commands ship today. A wider read/write
+surface (pages, attachments, search, comments, labels, users, and authoring) is
+designed but not yet implemented. See `SPEC.md` for the full contract and planned
 commands, and `skills/confluence-cli/SKILL.md` for the agent skill.
 
 ## Installation
@@ -32,19 +32,24 @@ API token + email over HTTP Basic. Set environment variables:
 | `CONFLUENCE_API_TOKEN` | API token |
 
 `ATLASSIAN_SITE` / `ATLASSIAN_API_EMAIL` / `ATLASSIAN_API_KEY` work as
-compatibility aliases. Stored credentials at
-`~/.config/confluence-cli/credentials.json` are also supported; the
-`confluence auth login` subcommand to manage them is planned but not yet
-available, so set env vars for now.
+compatibility aliases.
 
 ```bash
 export CONFLUENCE_EMAIL=user@acme.com
 export CONFLUENCE_API_TOKEN=your-api-token
 ```
 
+Or store credentials at `~/.config/confluence-cli/credentials.json` with
+`confluence auth login`. The token is read from stdin, validated against the
+site, and then saved under the canonical site URL:
+
+```bash
+printf '%s' "$TOKEN" | confluence auth login --site https://acme.atlassian.net --email you@example.com
+```
+
 ## Commands
 
-Both available commands honor `--quiet` and `--timeout`. Every command ends with
+The available commands honor `--quiet` and `--timeout`. Every command ends with
 a `_meta` trailer line.
 
 ### version
@@ -57,6 +62,21 @@ confluence version
 {"version":"0.1.0"}
 {"_meta":{"has_more":false}}
 ```
+
+### auth
+
+Manage stored credentials keyed by canonical site URL.
+
+```bash
+printf '%s' "$TOKEN" | confluence auth login --site https://acme.atlassian.net --email you@example.com
+confluence auth status
+confluence auth logout https://acme.atlassian.net
+```
+
+`auth login` reads the token from stdin (never argv), validates it, then saves
+it. `auth status` lists configured sites and any active env override without
+printing secrets. `auth logout` removes a site; the `<site>` positional is
+optional when only one is configured.
 
 ### space sync
 
