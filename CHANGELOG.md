@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.7.0](https://github.com/tammersaleh/confluence-sync/compare/v1.6.0...v1.7.0) (2026-07-03)
+
+
+### Features
+
+* add bodywrite package for write body input ([cf701b3](https://github.com/tammersaleh/confluence-sync/commit/cf701b3a83749086885589d6a73217c7aa2d66a1))
+* add label add/remove, attachment upload, comment add ([ba34fbc](https://github.com/tammersaleh/confluence-sync/commit/ba34fbccc1a04ec57b550ac0466265390428a2ca))
+* add page create, update, and delete commands ([505cd11](https://github.com/tammersaleh/confluence-sync/commit/505cd11310dbab8ac7d9cb3184d1e4f4c667e8f8))
+* add write domain methods ([2545c55](https://github.com/tammersaleh/confluence-sync/commit/2545c5563d6eb9a61a48657620047b1b1baf9f9e))
+* support write requests in the transport ([84dd103](https://github.com/tammersaleh/confluence-sync/commit/84dd1032a22fe498bf9dceb390411de5392c32d8))
+
 ## [1.6.0](https://github.com/tammersaleh/confluence-sync/compare/v1.5.0...v1.6.0) (2026-07-03)
 
 
