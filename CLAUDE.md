@@ -19,9 +19,10 @@ internal/
   cli/
     root.go                    CLI struct + global flags, Context(), NewPrinter, ResolveCredentials, ClassifyError.
     version.go                 `version` command.
-    space.go                   `space sync` command (wraps the sync engine).
+    space.go                   `space sync` (wraps the sync engine) and `space info` commands.
     auth.go                    `auth login|status|logout` commands.
     page.go                    `page list` and `page get` commands. Derives site/space from --space or URL args; --body-format incl. derived markdown.
+    attachment.go              `attachment list` and `attachment download` commands.
   output/
     output.go                  Printer (JSONL rows + _meta trailer), Meta, Error, ExitError, exit codes, field filtering.
     errors.go                  Error.AsItem for inline per-item errors.
@@ -106,19 +107,22 @@ old Cobra tool's `1 = config / 2 = auth / 3 = api / 4 = filesystem` codes
 
 ## Commands
 
-The `version`, `space sync`, `auth`, `page list`, and `page get` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `auth`, `page list`, `page get`, `attachment list`, and `attachment download` commands ship today. All honor `--quiet` and `--timeout`.
 
 - `confluence version` - emits the build version, then the trailer.
 - `confluence space sync <space-url> <output-dir>` - one-way space crawl to local Markdown. Flags: `--prune`, `--dry-run`, `--quiet`, `--timeout`, `--trace`. Progress goes to stderr; stdout carries a single summary object then the trailer.
+- `confluence space info <key|id|url>...` - metadata for one or more spaces (one site per invocation). Rows echo `input` and carry `id`, `key`, `name`, `type`, `status`, `homepage_id`. Per-item errors go inline and bump `_meta.error_count`.
 - `confluence auth login --site <url> --email <email>` - read the API token from stdin, validate it, and store it under the canonical site URL. Token never comes from argv.
 - `confluence auth status` - list configured sites and any active env override, without printing secrets.
 - `confluence auth logout [<site>]` - remove stored credentials for a site. The `<site>` positional is optional when exactly one site is configured.
 - `confluence page list --space <key|url>` - list pages in a space. Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `space_key`, and `parent_id`/`parent_type` when present.
 - `confluence page get <id|url>...` - fetch pages by id or URL (one site per invocation). `--body-format storage|atlas_doc_format (adf)|view|markdown (md)`, default `storage`. ADF `body` is a nested object; `markdown` is derived from storage (attachments resolved to remote URLs) and adds `source_body_format`. Per-item errors go inline and bump `_meta.error_count`.
+- `confluence attachment list <page id|url>` - list a page's attachments. Rows carry `id`, `title`, `media_type`, `download_url` (absolute), `page_id`.
+- `confluence attachment download <id> [-o|--out <path>]` - download an attachment by id (not a URL) to a file; defaults to the attachment filename in the current dir. Emits `id`, `title`, `media_type`, `path`, `bytes`.
 
-The rest of the surface (`page children|ancestors|tree`, `attachment`, `search`,
-`comment`, `label`, `user`, and the write commands) is designed but not yet
-implemented. See `SPEC.md`.
+The rest of the surface (`page children|ancestors|tree`, `space list`,
+`attachment upload`, `search`, `comment`, `label`, `user`, and the write
+commands) is designed but not yet implemented. See `SPEC.md`.
 
 ### Global flags
 

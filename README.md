@@ -4,8 +4,9 @@ An agent-first Confluence CLI. The binary is `confluence`; the repository and Go
 module stay `confluence-sync`. Output is JSONL (one JSON object per line);
 commands are non-interactive and scriptable, built for LLM agents and CI.
 
-The `version`, `space sync`, `auth`, `page list`, and `page get` commands ship
-today. A wider read/write surface (more page reads, attachments, search,
+The `version`, `space sync`, `space info`, `auth`, `page list`, `page get`,
+`attachment list`, and `attachment download` commands ship today. A wider
+read/write surface (more page reads, space list, attachment upload, search,
 comments, labels, users, and authoring) is designed but not yet implemented. See
 `SPEC.md` for the full contract and planned commands, and
 `skills/confluence-cli/SKILL.md` for the agent skill.
@@ -111,6 +112,25 @@ Accepts space URLs in these formats:
 - `https://acme.atlassian.net/wiki/spaces/ENG/overview`
 - `https://acme.atlassian.net/wiki/spaces/ENG/pages/...`
 
+### space info
+
+Fetch metadata for one or more spaces. Each argument is a space key, numeric
+space id, or space/page URL; all must be on one site. Each row echoes its
+`input`.
+
+```bash
+confluence space info ENG
+confluence space info ENG DESIGN 98765
+```
+
+```jsonl
+{"input":"ENG","id":"98765","key":"ENG","name":"Engineering","type":"global","status":"current","homepage_id":"123400"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+Unknown keys or spaces you can't read appear inline on stdout and bump
+`_meta.error_count`.
+
 ### page list
 
 List pages in a space. `--space` takes a bare key or a space/page URL. Use
@@ -146,6 +166,35 @@ confluence page get 123456 --body-format markdown
 
 Bad ids or pages you can't read appear inline on stdout and bump
 `_meta.error_count`.
+
+### attachment list
+
+List a page's attachments. The argument is a numeric page id or page URL. Rows
+carry `id`, `title`, `media_type`, `download_url` (absolute), and `page_id`.
+
+```bash
+confluence attachment list 123456
+```
+
+```jsonl
+{"id":"att987","title":"diagram.png","media_type":"image/png","download_url":"https://acme.atlassian.net/wiki/download/attachments/123456/diagram.png","page_id":"123456"}
+{"_meta":{"has_more":false}}
+```
+
+### attachment download
+
+Download an attachment by id (not a URL) to a file. Without `--out`, the file is
+written to the attachment's filename in the current directory.
+
+```bash
+confluence attachment download att987
+confluence attachment download att987 --out ./diagram.png
+```
+
+```jsonl
+{"id":"att987","title":"diagram.png","media_type":"image/png","path":"./diagram.png","bytes":48213}
+{"_meta":{"has_more":false}}
+```
 
 ## Sync behavior
 

@@ -1,6 +1,6 @@
 ---
 name: confluence-cli
-description: "Agent-first Confluence CLI: sync spaces to Markdown and read pages (page list/get), with the wider read/write surface arriving in later releases"
+description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get), inspect spaces (space info), and read/download attachments, with the wider read/write surface arriving in later releases"
 argument-hint: ""
 allowed-tools:
   - Bash(confluence *)
@@ -11,9 +11,9 @@ allowed-tools:
 Agent-first CLI for Confluence. JSONL output (one JSON object per line). Every
 command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 
-Today the `version`, `space sync`, `auth`, `page list`, and `page get` commands
-ship. The wider read/write surface below is planned but not yet implemented - do
-not invoke it.
+Today the `version`, `space sync`, `space info`, `auth`, `page list`, `page get`,
+`attachment list`, and `attachment download` commands ship. The wider read/write
+surface below is planned but not yet implemented - do not invoke it.
 
 ## Prerequisites
 
@@ -102,6 +102,23 @@ Preview before writing:
 confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs --dry-run
 ```
 
+### space info
+
+Fetch metadata for one or more spaces. Each argument is a space key, a numeric
+space id, or a space/page URL; all must be on one site. Each row echoes its
+`input`. Unknown keys or unreadable spaces appear inline on stdout and bump
+`_meta.error_count`.
+
+```bash
+confluence space info ENG
+confluence space info ENG DESIGN 98765
+```
+
+```jsonl
+{"input":"ENG","id":"98765","key":"ENG","name":"Engineering","type":"global","status":"current","homepage_id":"123400"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
 ### page list
 
 List pages in a space. `--space` is a bare key or a space/page URL. Page through
@@ -140,13 +157,42 @@ confluence page get https://acme.atlassian.net/wiki/spaces/ENG/pages/123456 --bo
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 
+### attachment list
+
+List a page's attachments. The argument is a numeric page id or page URL. Rows
+carry `id`, `title`, `media_type`, `download_url` (absolute), and `page_id`.
+
+```bash
+confluence attachment list 123456
+```
+
+```jsonl
+{"id":"att987","title":"diagram.png","media_type":"image/png","download_url":"https://acme.atlassian.net/wiki/download/attachments/123456/diagram.png","page_id":"123456"}
+{"_meta":{"has_more":false}}
+```
+
+### attachment download
+
+Download an attachment by id (not a URL) to a file. Without `--out`, the file is
+written to the attachment's filename in the current directory.
+
+```bash
+confluence attachment download att987
+confluence attachment download att987 --out ./diagram.png
+```
+
+```jsonl
+{"id":"att987","title":"diagram.png","media_type":"image/png","path":"./diagram.png","bytes":48213}
+{"_meta":{"has_more":false}}
+```
+
 ## Planned (not yet available)
 
 Designed but not implemented. Do not run these yet:
 
 - `confluence page children|ancestors|tree` - read page hierarchy.
-- `confluence space list|info` - list and inspect spaces.
-- `confluence attachment list|download|upload` - attachments.
+- `confluence space list` - list accessible spaces.
+- `confluence attachment upload` - upload files to a page.
 - `confluence search <cql>` - CQL search.
 - `confluence comment list|add` - footer and inline comments.
 - `confluence label list|add|remove` - labels.

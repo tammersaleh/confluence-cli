@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, `auth`, `page list`, and `page get` commands ship today (see "Commands available now"); everything under "Planned commands" is designed but not yet implemented.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `auth`, `page list`, `page get`, `attachment list`, and `attachment download` commands ship today (see "Commands available now"); everything under "Planned commands" is designed but not yet implemented.
 
 ## Design principles
 
@@ -91,7 +91,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `auth`, `page list`, and `page get` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `auth`, `page list`, `page get`, `attachment list`, and `attachment download` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### version
 
@@ -126,6 +126,23 @@ $ confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs
 $ confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs --dry-run
 {"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":true}
 {"_meta":{"has_more":false}}
+```
+
+### space info
+
+```text
+confluence space info <key|id|url>...
+```
+
+Fetch metadata for one or more spaces. Each argument is a space key (e.g. `ENG`), a numeric space id, or a space/page URL. All arguments must resolve to a single site (one site per invocation); mixing sites is an error. Each row echoes the `input` that produced it and carries `id`, `key`, `name`, `type`, `status`, and `homepage_id`.
+
+Per-item errors (unknown key, no permission) appear inline on stdout and bump `_meta.error_count`.
+
+```jsonl
+$ confluence space info ENG 99999
+{"input":"ENG","id":"98765","key":"ENG","name":"Engineering","type":"global","status":"current","homepage_id":"123400"}
+{"input":"99999","error":"space_not_found","detail":"No space with id '99999'","hint":"confluence space info ENG"}
+{"_meta":{"has_more":false,"error_count":1}}
 ```
 
 ### auth
@@ -215,6 +232,34 @@ $ confluence page get 123456 99999 --body-format markdown
 {"_meta":{"has_more":false,"error_count":1}}
 ```
 
+### attachment list
+
+```text
+confluence attachment list <page id|url>
+```
+
+List a page's attachments. The argument is a numeric page id or a page URL. Each row carries `id`, `title`, `media_type`, `download_url`, and `page_id`. `download_url` is absolute.
+
+```jsonl
+$ confluence attachment list 123456
+{"id":"att987","title":"diagram.png","media_type":"image/png","download_url":"https://acme.atlassian.net/wiki/download/attachments/123456/diagram.png","page_id":"123456"}
+{"_meta":{"has_more":false}}
+```
+
+### attachment download
+
+```text
+confluence attachment download <id> [-o|--out <path>]
+```
+
+Download an attachment to a file. The argument is an attachment id (not a URL). Without `--out`, the file is written to the attachment's filename in the current directory. The emitted row carries `id`, `title`, `media_type`, `path`, and `bytes`.
+
+```jsonl
+$ confluence attachment download att987 -o ./diagram.png
+{"id":"att987","title":"diagram.png","media_type":"image/png","path":"./diagram.png","bytes":48213}
+{"_meta":{"has_more":false}}
+```
+
 ## Planned commands (not yet implemented)
 
 Everything below is designed but not built. Do not invoke these yet; they are documented so the surface is settled before implementation. They land across phases (`page` first, then attachments/space, then the wider read surface, then writes).
@@ -228,12 +273,9 @@ Everything below is designed but not built. Do not invoke these yet; they are do
 ### Space (read)
 
 - `confluence space list` - list accessible spaces. Not yet available.
-- `confluence space info <key|id|url>...` - metadata for one or more spaces. Not yet available.
 
 ### Attachment
 
-- `confluence attachment list <page>` - list a page's attachments. Not yet available.
-- `confluence attachment download <id|url>` - download an attachment. Not yet available.
 - `confluence attachment upload <page> <file>...` - upload files to a page. Not yet available.
 
 ### Search, comments, labels, users (read)
