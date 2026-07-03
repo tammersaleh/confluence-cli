@@ -88,25 +88,25 @@ func (c *client) doRequest(ctx context.Context, method, path string, query url.V
 		}
 
 		if isRetryable(resp.StatusCode) {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("%w: status %d", ErrAPIError, resp.StatusCode)
 			continue
 		}
 
 		switch resp.StatusCode {
 		case http.StatusUnauthorized:
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, ErrUnauthorized
 		case http.StatusForbidden:
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, ErrForbidden
 		case http.StatusNotFound:
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, ErrSpaceNotFound
 		}
 
 		if resp.StatusCode >= 400 {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("%w: status %d", ErrAPIError, resp.StatusCode)
 		}
 
@@ -132,7 +132,7 @@ func (c *client) GetSpace(ctx context.Context, spaceKey string) (*Space, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result spacesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -182,10 +182,10 @@ func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
 
 		var result pagesResponse
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("decoding response: %w", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		for _, p := range result.Results {
 			allPages = append(allPages, Page{
@@ -263,7 +263,7 @@ func (c *client) getPageParent(ctx context.Context, pageID string) (parentID, pa
 	if err != nil {
 		return "", "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result pageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -301,7 +301,7 @@ func (c *client) GetPageContent(ctx context.Context, pageID string) (*PageConten
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result pageContentResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -354,10 +354,10 @@ func (c *client) GetAttachments(ctx context.Context, pageID string) ([]Attachmen
 
 		var result attachmentsResponse
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("decoding response: %w", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		for _, a := range result.Results {
 			allAttachments = append(allAttachments, Attachment{
@@ -398,7 +398,7 @@ func (c *client) GetContentParent(ctx context.Context, id string, contentType st
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result pageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -446,13 +446,13 @@ func (c *client) DownloadAttachment(ctx context.Context, attachment Attachment) 
 		}
 
 		if isRetryable(resp.StatusCode) {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("%w: status %d downloading %s", ErrAPIError, resp.StatusCode, u)
 			continue
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("%w: status %d downloading %s", ErrAPIError, resp.StatusCode, u)
 		}
 

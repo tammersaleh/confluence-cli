@@ -324,10 +324,11 @@ func (c *converter) handleTask(decoder *xml.Decoder) {
 		case xml.StartElement:
 			depth++
 			name := xmlName(t.Name)
-			if name == "ac:task-status" {
+			switch name {
+			case "ac:task-status":
 				status = c.collectInlineText(decoder, "ac:task-status")
 				depth--
-			} else if name == "ac:task-body" {
+			case "ac:task-body":
 				body = c.collectInlineText(decoder, "ac:task-body")
 				depth--
 			}

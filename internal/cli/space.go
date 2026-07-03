@@ -27,7 +27,7 @@ type writerLogger struct {
 }
 
 func (l writerLogger) Printf(format string, args ...interface{}) {
-	fmt.Fprintf(l.w, format+"\n", args...)
+	_, _ = fmt.Fprintf(l.w, format+"\n", args...)
 }
 
 type noopLogger struct{}

@@ -240,7 +240,7 @@ func (s *Syncer) downloadAttachment(ctx context.Context, att confluence.Attachme
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	data, err := io.ReadAll(rc)
 	if err != nil {
@@ -311,22 +311,22 @@ func extractVersion(data []byte) (int, bool) {
 func buildFrontmatter(content *confluence.PageContent) string {
 	var b strings.Builder
 	b.WriteString("---\n")
-	b.WriteString(fmt.Sprintf("confluence_page_id: %q\n", content.ID))
-	b.WriteString(fmt.Sprintf("title: %q\n", content.Title))
+	fmt.Fprintf(&b, "confluence_page_id: %q\n", content.ID)
+	fmt.Fprintf(&b, "title: %q\n", content.Title)
 	if content.Author != "" {
-		b.WriteString(fmt.Sprintf("author: %q\n", content.Author))
+		fmt.Fprintf(&b, "author: %q\n", content.Author)
 	} else if content.AuthorID != "" {
-		b.WriteString(fmt.Sprintf("author_id: %q\n", content.AuthorID))
+		fmt.Fprintf(&b, "author_id: %q\n", content.AuthorID)
 	}
 	if content.WebURL != "" {
-		b.WriteString(fmt.Sprintf("confluence_url: %q\n", content.WebURL))
+		fmt.Fprintf(&b, "confluence_url: %q\n", content.WebURL)
 	}
-	b.WriteString(fmt.Sprintf("version: %d\n", content.Version))
+	fmt.Fprintf(&b, "version: %d\n", content.Version)
 	if content.CreatedAt != "" {
-		b.WriteString(fmt.Sprintf("created_at: %q\n", content.CreatedAt))
+		fmt.Fprintf(&b, "created_at: %q\n", content.CreatedAt)
 	}
 	if content.ModifiedAt != "" {
-		b.WriteString(fmt.Sprintf("modified_at: %q\n", content.ModifiedAt))
+		fmt.Fprintf(&b, "modified_at: %q\n", content.ModifiedAt)
 	}
 	b.WriteString("---\n\n")
 	return b.String()
