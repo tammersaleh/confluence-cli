@@ -12,6 +12,7 @@ var (
 	ErrPageNotFound       = errors.New("page not found")       // used by GetPage in a later commit
 	ErrAttachmentNotFound = errors.New("attachment not found") // 404 from attachment-by-id lookups
 	ErrNotFound           = errors.New("not found")            // generic 404 from doRequest
+	ErrUserNotFound       = errors.New("user not found")       // 404 from user-by-id lookups
 	ErrUnauthorized       = errors.New("unauthorized")
 	ErrForbidden          = errors.New("forbidden")
 	ErrAPIError           = errors.New("API error")
@@ -74,6 +75,35 @@ type Attachment struct {
 	DownloadURL string
 }
 
+// SearchResult is one hit from a CQL search. URL is returned verbatim from the
+// API (it may be relative to the site root); the caller presents it as-is.
+type SearchResult struct {
+	ID       string
+	Title    string
+	Type     string // "page", "blogpost", "comment", etc.
+	SpaceKey string
+	Excerpt  string
+	URL      string
+}
+
+// Comment is a footer or inline comment on a page. Kind is "footer" or "inline".
+// Body is the storage-format (XHTML) value.
+type Comment struct {
+	ID        string
+	Kind      string // "footer" or "inline"
+	Body      string
+	AuthorID  string
+	CreatedAt string // ISO 8601
+	WebURL    string // Browser URL to view the comment
+}
+
+// Label is a label attached to a page.
+type Label struct {
+	ID     string
+	Name   string
+	Prefix string
+}
+
 type APIBodyFormat string
 
 const (
@@ -101,6 +131,11 @@ type PageDetail struct {
 
 type Client interface {
 	GetCurrentUser(ctx context.Context) (*CurrentUser, error)
+	GetUser(ctx context.Context, accountID string) (*CurrentUser, error)
+	Search(ctx context.Context, cql, cursor string, limit int) (results []SearchResult, nextCursor string, err error)
+	GetFooterComments(ctx context.Context, pageID, cursor string, limit int) (comments []Comment, nextCursor string, err error)
+	GetInlineComments(ctx context.Context, pageID, cursor string, limit int) (comments []Comment, nextCursor string, err error)
+	GetLabels(ctx context.Context, pageID, cursor string, limit int) (labels []Label, nextCursor string, err error)
 	GetSpace(ctx context.Context, spaceKey string) (*Space, error)
 	GetSpaceByID(ctx context.Context, spaceID string) (*Space, error)
 	ListSpaces(ctx context.Context, cursor string, limit int) (spaces []Space, nextCursor string, err error)

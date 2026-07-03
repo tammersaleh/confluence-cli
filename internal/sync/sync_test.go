@@ -93,6 +93,26 @@ func (m *mockClient) ListSpaces(ctx context.Context, cursor string, limit int) (
 	return []confluence.Space{*m.space}, "", nil
 }
 
+func (m *mockClient) GetUser(ctx context.Context, accountID string) (*confluence.CurrentUser, error) {
+	return nil, nil
+}
+
+func (m *mockClient) Search(ctx context.Context, cql, cursor string, limit int) ([]confluence.SearchResult, string, error) {
+	return nil, "", nil
+}
+
+func (m *mockClient) GetFooterComments(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Comment, string, error) {
+	return nil, "", nil
+}
+
+func (m *mockClient) GetInlineComments(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Comment, string, error) {
+	return nil, "", nil
+}
+
+func (m *mockClient) GetLabels(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Label, string, error) {
+	return nil, "", nil
+}
+
 func TestSync_SingleLeafPage(t *testing.T) {
 	client := &mockClient{
 		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},

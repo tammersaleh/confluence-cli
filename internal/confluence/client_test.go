@@ -1485,6 +1485,286 @@ func TestClient_TraceEmission(t *testing.T) {
 	}
 }
 
+func TestClient_Search(t *testing.T) {
+	var gotCQL, gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/rest/api/search" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		gotCQL = r.URL.Query().Get("cql")
+		gotLimit = r.URL.Query().Get("limit")
+		w.Write([]byte(`{
+			"results": [
+				{
+					"content": {"id": "123", "title": "My Page", "type": "page", "space": {"key": "ENG"}},
+					"excerpt": "some excerpt",
+					"url": "/wiki/spaces/ENG/pages/123"
+				}
+			],
+			"_links": {"next": "/wiki/rest/api/search?cursor=NEXT"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	results, nextCursor, err := c.Search(context.Background(), "type=page", "", 0)
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+	if gotCQL != "type=page" {
+		t.Errorf("cql = %q, want type=page", gotCQL)
+	}
+	if gotLimit != "25" {
+		t.Errorf("limit = %q, want 25 (default)", gotLimit)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	r := results[0]
+	if r.ID != "123" || r.Title != "My Page" || r.Type != "page" {
+		t.Errorf("result = %+v, want ID=123 Title=My Page Type=page", r)
+	}
+	if r.SpaceKey != "ENG" {
+		t.Errorf("SpaceKey = %q, want ENG", r.SpaceKey)
+	}
+	if r.Excerpt != "some excerpt" {
+		t.Errorf("Excerpt = %q, want some excerpt", r.Excerpt)
+	}
+	if r.URL != "/wiki/spaces/ENG/pages/123" {
+		t.Errorf("URL = %q, want /wiki/spaces/ENG/pages/123 (verbatim)", r.URL)
+	}
+	if nextCursor != "NEXT" {
+		t.Errorf("nextCursor = %q, want NEXT", nextCursor)
+	}
+}
+
+func TestClient_GetFooterComments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/pages/123/footer-comments" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"results": [
+				{
+					"id": "c1",
+					"body": {"storage": {"value": "<p>Nice</p>"}},
+					"version": {"authorId": "user1", "createdAt": "2024-01-15T10:30:00.000Z"},
+					"_links": {"webui": "/spaces/ENG/pages/123?focusedCommentId=c1"}
+				}
+			],
+			"_links": {"next": "/wiki/api/v2/pages/123/footer-comments?cursor=NEXT"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	comments, nextCursor, err := c.GetFooterComments(context.Background(), "123", "", 25)
+	if err != nil {
+		t.Fatalf("GetFooterComments() error: %v", err)
+	}
+	if len(comments) != 1 {
+		t.Fatalf("got %d comments, want 1", len(comments))
+	}
+	cm := comments[0]
+	if cm.ID != "c1" {
+		t.Errorf("ID = %q, want c1", cm.ID)
+	}
+	if cm.Kind != "footer" {
+		t.Errorf("Kind = %q, want footer", cm.Kind)
+	}
+	if cm.Body != "<p>Nice</p>" {
+		t.Errorf("Body = %q, want <p>Nice</p>", cm.Body)
+	}
+	if cm.AuthorID != "user1" {
+		t.Errorf("AuthorID = %q, want user1", cm.AuthorID)
+	}
+	if cm.CreatedAt != "2024-01-15T10:30:00.000Z" {
+		t.Errorf("CreatedAt = %q, want 2024-01-15T10:30:00.000Z", cm.CreatedAt)
+	}
+	wantURL := server.URL + "/wiki/spaces/ENG/pages/123?focusedCommentId=c1"
+	if cm.WebURL != wantURL {
+		t.Errorf("WebURL = %q, want %q", cm.WebURL, wantURL)
+	}
+	if nextCursor != "NEXT" {
+		t.Errorf("nextCursor = %q, want NEXT", nextCursor)
+	}
+}
+
+func TestClient_GetFooterComments_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.GetFooterComments(context.Background(), "123", "", 25)
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_GetInlineComments(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/pages/123/inline-comments" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"results": [
+				{"id": "c9", "body": {"storage": {"value": "<p>Hmm</p>"}}, "version": {"authorId": "u2"}}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	comments, _, err := c.GetInlineComments(context.Background(), "123", "", 25)
+	if err != nil {
+		t.Fatalf("GetInlineComments() error: %v", err)
+	}
+	if len(comments) != 1 {
+		t.Fatalf("got %d comments, want 1", len(comments))
+	}
+	if comments[0].Kind != "inline" {
+		t.Errorf("Kind = %q, want inline", comments[0].Kind)
+	}
+	if comments[0].ID != "c9" {
+		t.Errorf("ID = %q, want c9", comments[0].ID)
+	}
+}
+
+func TestClient_GetInlineComments_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.GetInlineComments(context.Background(), "123", "", 25)
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_GetLabels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/pages/123/labels" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"results": [
+				{"id": "l1", "name": "backend", "prefix": "global"},
+				{"id": "l2", "name": "wip", "prefix": "my"}
+			],
+			"_links": {"next": "/wiki/api/v2/pages/123/labels?cursor=NEXT"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	labels, nextCursor, err := c.GetLabels(context.Background(), "123", "", 25)
+	if err != nil {
+		t.Fatalf("GetLabels() error: %v", err)
+	}
+	if len(labels) != 2 {
+		t.Fatalf("got %d labels, want 2", len(labels))
+	}
+	if labels[0].ID != "l1" || labels[0].Name != "backend" || labels[0].Prefix != "global" {
+		t.Errorf("labels[0] = %+v, want ID=l1 Name=backend Prefix=global", labels[0])
+	}
+	if labels[1].Name != "wip" {
+		t.Errorf("labels[1].Name = %q, want wip", labels[1].Name)
+	}
+	if nextCursor != "NEXT" {
+		t.Errorf("nextCursor = %q, want NEXT", nextCursor)
+	}
+}
+
+func TestClient_GetLabels_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.GetLabels(context.Background(), "123", "", 25)
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_GetUser(t *testing.T) {
+	tests := []struct {
+		name            string
+		response        string
+		statusCode      int
+		wantAccountID   string
+		wantDisplayName string
+		wantEmail       string
+		wantErr         error
+	}{
+		{
+			name:            "success",
+			response:        `{"accountId":"5b10","displayName":"Ada","email":"ada@example.com"}`,
+			statusCode:      http.StatusOK,
+			wantAccountID:   "5b10",
+			wantDisplayName: "Ada",
+			wantEmail:       "ada@example.com",
+		},
+		{
+			name:            "publicName fallback",
+			response:        `{"accountId":"5b10","displayName":"","publicName":"Ada L"}`,
+			statusCode:      http.StatusOK,
+			wantAccountID:   "5b10",
+			wantDisplayName: "Ada L",
+		},
+		{
+			name:       "not found",
+			response:   `{"message":"not found"}`,
+			statusCode: http.StatusNotFound,
+			wantErr:    ErrUserNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/wiki/rest/api/user" {
+					t.Errorf("unexpected path: %s", r.URL.Path)
+				}
+				if got := r.URL.Query().Get("accountId"); got != "5b10" {
+					t.Errorf("accountId = %q, want 5b10", got)
+				}
+				w.WriteHeader(tt.statusCode)
+				w.Write([]byte(tt.response))
+			}))
+			defer server.Close()
+
+			c := NewClient(server.URL, "test@example.com", "api-token")
+			user, err := c.GetUser(context.Background(), "5b10")
+
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("GetUser() error = %v, wantErr %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("GetUser() unexpected error: %v", err)
+				return
+			}
+			if user.AccountID != tt.wantAccountID {
+				t.Errorf("AccountID = %q, want %q", user.AccountID, tt.wantAccountID)
+			}
+			if user.DisplayName != tt.wantDisplayName {
+				t.Errorf("DisplayName = %q, want %q", user.DisplayName, tt.wantDisplayName)
+			}
+			if user.Email != tt.wantEmail {
+				t.Errorf("Email = %q, want %q", user.Email, tt.wantEmail)
+			}
+		})
+	}
+}
+
 func TestClient_AuthHeader(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

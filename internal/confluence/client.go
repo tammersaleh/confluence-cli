@@ -202,6 +202,236 @@ func (c *client) GetCurrentUser(ctx context.Context) (*CurrentUser, error) {
 	}, nil
 }
 
+func (c *client) GetUser(ctx context.Context, accountID string) (*CurrentUser, error) {
+	query := url.Values{}
+	query.Set("accountId", accountID)
+
+	resp, err := c.doRequest(ctx, http.MethodGet, "/wiki/rest/api/user", query)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result currentUserResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	displayName := result.DisplayName
+	if displayName == "" {
+		displayName = result.PublicName
+	}
+
+	return &CurrentUser{
+		AccountID:   result.AccountID,
+		DisplayName: displayName,
+		Email:       result.Email,
+	}, nil
+}
+
+type searchResponse struct {
+	Results []struct {
+		Content struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+			Type  string `json:"type"`
+			Space struct {
+				Key string `json:"key"`
+			} `json:"space"`
+		} `json:"content"`
+		Excerpt string `json:"excerpt"`
+		URL     string `json:"url"`
+	} `json:"results"`
+	Links struct {
+		Next string `json:"next"`
+	} `json:"_links"`
+}
+
+// Search runs a CQL query via the v1 search endpoint and returns one API page of
+// results. URLs are returned verbatim (they may be relative). Invalid CQL
+// typically returns a 400, surfaced as a *StatusError wrapping ErrAPIError.
+func (c *client) Search(ctx context.Context, cql, cursor string, limit int) (results []SearchResult, nextCursor string, err error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	query := url.Values{}
+	query.Set("cql", cql)
+	query.Set("limit", fmt.Sprintf("%d", limit))
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+
+	resp, err := c.doRequest(ctx, http.MethodGet, "/wiki/rest/api/search", query)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result searchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	results = make([]SearchResult, 0, len(result.Results))
+	for _, r := range result.Results {
+		results = append(results, SearchResult{
+			ID:       r.Content.ID,
+			Title:    r.Content.Title,
+			Type:     r.Content.Type,
+			SpaceKey: r.Content.Space.Key,
+			Excerpt:  r.Excerpt,
+			URL:      r.URL,
+		})
+	}
+
+	if hdr := resp.Header.Get("Link"); hdr != "" {
+		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
+			return results, cur, nil
+		}
+	}
+	return results, cursorFromNext(result.Links.Next), nil
+}
+
+type commentsResponse struct {
+	Results []struct {
+		ID   string `json:"id"`
+		Body struct {
+			Storage struct {
+				Value string `json:"value"`
+			} `json:"storage"`
+		} `json:"body"`
+		Version struct {
+			AuthorID  string `json:"authorId"`
+			CreatedAt string `json:"createdAt"`
+		} `json:"version"`
+		Links struct {
+			WebUI string `json:"webui"`
+		} `json:"_links"`
+	} `json:"results"`
+	Links struct {
+		Next string `json:"next"`
+	} `json:"_links"`
+}
+
+// getComments fetches one API page of comments from the given v2 sub-resource
+// ("footer-comments" or "inline-comments") and tags them with kind.
+func (c *client) getComments(ctx context.Context, pageID, resource, kind, cursor string, limit int) (comments []Comment, nextCursor string, err error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	query := url.Values{}
+	query.Set("body-format", "storage")
+	query.Set("limit", fmt.Sprintf("%d", limit))
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+
+	path := fmt.Sprintf("/wiki/api/v2/pages/%s/%s", pageID, resource)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, query)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, "", ErrPageNotFound
+		}
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result commentsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	comments = make([]Comment, 0, len(result.Results))
+	for _, r := range result.Results {
+		webURL := r.Links.WebUI
+		if webURL != "" && !strings.HasPrefix(webURL, "http") {
+			if !strings.HasPrefix(webURL, "/wiki") {
+				webURL = "/wiki" + webURL
+			}
+			webURL = c.baseURL + webURL
+		}
+		comments = append(comments, Comment{
+			ID:        r.ID,
+			Kind:      kind,
+			Body:      r.Body.Storage.Value,
+			AuthorID:  r.Version.AuthorID,
+			CreatedAt: r.Version.CreatedAt,
+			WebURL:    webURL,
+		})
+	}
+
+	if hdr := resp.Header.Get("Link"); hdr != "" {
+		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
+			return comments, cur, nil
+		}
+	}
+	return comments, cursorFromNext(result.Links.Next), nil
+}
+
+func (c *client) GetFooterComments(ctx context.Context, pageID, cursor string, limit int) ([]Comment, string, error) {
+	return c.getComments(ctx, pageID, "footer-comments", "footer", cursor, limit)
+}
+
+func (c *client) GetInlineComments(ctx context.Context, pageID, cursor string, limit int) ([]Comment, string, error) {
+	return c.getComments(ctx, pageID, "inline-comments", "inline", cursor, limit)
+}
+
+type labelsResponse struct {
+	Results []struct {
+		ID     string `json:"id"`
+		Name   string `json:"name"`
+		Prefix string `json:"prefix"`
+	} `json:"results"`
+	Links struct {
+		Next string `json:"next"`
+	} `json:"_links"`
+}
+
+func (c *client) GetLabels(ctx context.Context, pageID, cursor string, limit int) (labels []Label, nextCursor string, err error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	query := url.Values{}
+	query.Set("limit", fmt.Sprintf("%d", limit))
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+
+	path := fmt.Sprintf("/wiki/api/v2/pages/%s/labels", pageID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, query)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, "", ErrPageNotFound
+		}
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result labelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	labels = make([]Label, 0, len(result.Results))
+	for _, l := range result.Results {
+		labels = append(labels, Label{
+			ID:     l.ID,
+			Name:   l.Name,
+			Prefix: l.Prefix,
+		})
+	}
+
+	if hdr := resp.Header.Get("Link"); hdr != "" {
+		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
+			return labels, cur, nil
+		}
+	}
+	return labels, cursorFromNext(result.Links.Next), nil
+}
+
 type spaceResponse struct {
 	ID         string `json:"id"`
 	Key        string `json:"key"`
