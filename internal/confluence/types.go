@@ -108,6 +108,16 @@ type Label struct {
 	Prefix string
 }
 
+// InlineCommentSelection anchors an inline comment to on-page text. Text is the
+// literal string to attach to; MatchCount is the total number of occurrences of
+// Text in the page body (>=1) and MatchIndex is which occurrence to anchor to
+// (0-based, < MatchCount).
+type InlineCommentSelection struct {
+	Text       string // the on-page text to anchor to
+	MatchCount int    // total occurrences of Text in the page body (>=1)
+	MatchIndex int    // which occurrence, 0-based
+}
+
 type APIBodyFormat string
 
 const (
@@ -199,6 +209,7 @@ type Client interface {
 	UpdatePage(ctx context.Context, p UpdatePageParams) (*PageRecord, error)
 	DeletePage(ctx context.Context, pageID string) error
 	AddFooterComment(ctx context.Context, pageID string, body WriteBody) (*Comment, error)
+	AddInlineComment(ctx context.Context, pageID string, body WriteBody, sel InlineCommentSelection) (*Comment, error)
 	AddLabel(ctx context.Context, pageID, label string) (*Label, error)
 	RemoveLabel(ctx context.Context, pageID, label string) error
 	UploadAttachment(ctx context.Context, pageID, filePath string) (*Attachment, error)

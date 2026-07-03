@@ -1527,6 +1527,58 @@ func (c *client) AddFooterComment(ctx context.Context, pageID string, body Write
 	}, nil
 }
 
+// AddInlineComment creates an inline comment anchored to on-page text via the v2
+// /wiki/api/v2/inline-comments endpoint. The inlineCommentProperties shape
+// (textSelection/textSelectionMatchCount/textSelectionMatchIndex) follows the
+// Atlassian docs. NOTE: this create shape has not been verified against a live
+// site; it is exercised via httptest like the rest of the write surface. Live
+// verification is pending.
+func (c *client) AddInlineComment(ctx context.Context, pageID string, body WriteBody, sel InlineCommentSelection) (*Comment, error) {
+	payload := map[string]any{
+		"pageId": pageID,
+		"body": bodyPayload{
+			Representation: string(body.Representation),
+			Value:          body.Value,
+		},
+		"inlineCommentProperties": map[string]any{
+			"textSelection":           sel.Text,
+			"textSelectionMatchCount": sel.MatchCount,
+			"textSelectionMatchIndex": sel.MatchIndex,
+		},
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPost, "/wiki/api/v2/inline-comments", nil, payload)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrPageNotFound
+		}
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		ID   string `json:"id"`
+		Body struct {
+			Storage struct {
+				Value string `json:"value"`
+			} `json:"storage"`
+		} `json:"body"`
+		Links struct {
+			WebUI string `json:"webui"`
+		} `json:"_links"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return &Comment{
+		ID:     result.ID,
+		Kind:   "inline",
+		Body:   result.Body.Storage.Value,
+		WebURL: c.absWebURL(result.Links.WebUI),
+	}, nil
+}
+
 func (c *client) AddLabel(ctx context.Context, pageID, label string) (*Label, error) {
 	payload := []map[string]string{
 		{"prefix": "global", "name": label},

@@ -307,7 +307,71 @@ func TestCommentAdd_MissingBodyFormat(t *testing.T) {
 	}
 }
 
-func TestCommentAdd_InlineNotImplemented(t *testing.T) {
+// inlineCommentAddServer serves POST /wiki/api/v2/inline-comments, echoing a
+// fixed id and webui link. It records the last posted textSelection.
+func inlineCommentAddServer(t *testing.T, gotSel *string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/inline-comments" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		if gotSel != nil {
+			var payload struct {
+				InlineCommentProperties struct {
+					TextSelection string `json:"textSelection"`
+				} `json:"inlineCommentProperties"`
+			}
+			_ = json.Unmarshal(body, &payload)
+			*gotSel = payload.InlineCommentProperties.TextSelection
+		}
+		_, _ = w.Write([]byte(`{"id":"ic-new","body":{"storage":{"value":"<p>hi</p>"}},"_links":{"webui":"/w/ic-new"}}`))
+	}))
+}
+
+func TestCommentAdd_Inline(t *testing.T) {
+	clearCredEnv(t)
+	var gotSel string
+	server := inlineCommentAddServer(t, &gotSel)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+	c.SetInput(strings.NewReader("<p>hello</p>"))
+
+	cmd := &CommentAddCmd{Page: "123", BodyFormat: "storage", Inline: true, SelectionText: "foo", MatchCount: 1}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if gotSel != "foo" {
+		t.Errorf("posted textSelection = %q, want foo", gotSel)
+	}
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 row + meta, got %d: %q", len(lines), out.String())
+	}
+	row := lines[0]
+	if row["id"] != "ic-new" || row["kind"] != "inline" || row["page_id"] != "123" {
+		t.Errorf("row shape unexpected: %v", row)
+	}
+	if row["selection_text"] != "foo" {
+		t.Errorf("selection_text = %v, want foo", row["selection_text"])
+	}
+	if row["body_format"] != "storage" {
+		t.Errorf("body_format = %v, want storage", row["body_format"])
+	}
+}
+
+func TestCommentAdd_InlineMissingSelection(t *testing.T) {
 	clearCredEnv(t)
 	t.Setenv("CONFLUENCE_SITE", "https://acme.atlassian.net")
 	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
@@ -319,14 +383,39 @@ func TestCommentAdd_InlineNotImplemented(t *testing.T) {
 	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
 	c.SetInput(strings.NewReader("<p>hi</p>"))
 
-	cmd := &CommentAddCmd{Page: "123", BodyFormat: "storage", Inline: true}
+	cmd := &CommentAddCmd{Page: "123", BodyFormat: "storage", Inline: true, MatchCount: 1}
 	err := cmd.Run(c)
 
 	var oErr *output.Error
 	if !errors.As(err, &oErr) {
 		t.Fatalf("expected *output.Error, got %T: %v", err, err)
 	}
-	if oErr.Err != "not_implemented" || oErr.Code != output.ExitGeneral {
-		t.Errorf("got Err=%q Code=%d, want not_implemented/%d", oErr.Err, oErr.Code, output.ExitGeneral)
+	if oErr.Err != "invalid_input" || oErr.Code != output.ExitGeneral {
+		t.Errorf("got Err=%q Code=%d, want invalid_input/%d", oErr.Err, oErr.Code, output.ExitGeneral)
+	}
+}
+
+func TestCommentAdd_InlineBadMatchIndex(t *testing.T) {
+	clearCredEnv(t)
+	t.Setenv("CONFLUENCE_SITE", "https://acme.atlassian.net")
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+	c.SetInput(strings.NewReader("<p>hi</p>"))
+
+	// match-index >= match-count.
+	cmd := &CommentAddCmd{Page: "123", BodyFormat: "storage", Inline: true, SelectionText: "foo", MatchCount: 1, MatchIndex: 1}
+	err := cmd.Run(c)
+
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Err != "invalid_input" || oErr.Code != output.ExitGeneral {
+		t.Errorf("got Err=%q Code=%d, want invalid_input/%d", oErr.Err, oErr.Code, output.ExitGeneral)
 	}
 }

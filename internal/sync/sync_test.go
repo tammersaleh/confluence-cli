@@ -129,6 +129,10 @@ func (m *mockClient) AddFooterComment(ctx context.Context, pageID string, body c
 	return nil, nil
 }
 
+func (m *mockClient) AddInlineComment(ctx context.Context, pageID string, body confluence.WriteBody, sel confluence.InlineCommentSelection) (*confluence.Comment, error) {
+	return nil, nil
+}
+
 func (m *mockClient) AddLabel(ctx context.Context, pageID, label string) (*confluence.Label, error) {
 	return nil, nil
 }
@@ -735,8 +739,8 @@ func TestSync_MultipleRoots_NoCollisionWithFirstRootChildren(t *testing.T) {
 		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
 		pages: []confluence.Page{
 			{ID: "1", Title: "Home", ParentID: ""},
-			{ID: "2", Title: "Docs", ParentID: "1"},  // Child of first root
-			{ID: "3", Title: "Docs!", ParentID: ""},  // Second root with same sanitized name
+			{ID: "2", Title: "Docs", ParentID: "1"}, // Child of first root
+			{ID: "3", Title: "Docs!", ParentID: ""}, // Second root with same sanitized name
 		},
 		contents: map[string]*confluence.PageContent{
 			"1": {ID: "1", Title: "Home", Body: "<p>Home</p>", Version: 1},

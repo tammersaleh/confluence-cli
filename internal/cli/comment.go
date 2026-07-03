@@ -11,7 +11,7 @@ import (
 
 type CommentCmd struct {
 	List CommentListCmd `cmd:"" help:"List a page's comments."`
-	Add  CommentAddCmd  `cmd:"" help:"Add a footer comment to a page."`
+	Add  CommentAddCmd  `cmd:"" help:"Add a footer or inline comment to a page."`
 }
 
 // CommentListCmd lists a page's comments. By default it fetches both footer and
@@ -84,28 +84,23 @@ func (c *CommentListCmd) Run(cli *CLI) error {
 	return p.PrintMeta(output.Meta{})
 }
 
-// CommentAddCmd adds a footer comment to a page. The body is read from stdin and
-// validated for the requested --body-format. Inline comments are not yet
-// supported.
+// CommentAddCmd adds a comment to a page. The body is read from stdin and
+// validated for the requested --body-format. By default it adds a footer
+// comment; --inline anchors an inline comment to on-page text selected by
+// --selection-text (with optional --match-index/--match-count).
 type CommentAddCmd struct {
-	Page       string `arg:"" name:"id-or-url" help:"Page ID or URL."`
-	BodyFormat string `help:"storage, adf, or markdown (piped body)."`
-	Inline     bool   `help:"(not yet supported)"`
+	Page          string `arg:"" name:"id-or-url" help:"Page ID or URL."`
+	BodyFormat    string `help:"storage, adf, or markdown (piped body)."`
+	Inline        bool   `help:"Add an inline comment anchored to on-page text (requires --selection-text)."`
+	SelectionText string `name:"selection-text" help:"Text on the page to anchor an inline comment to (required with --inline)."`
+	MatchIndex    int    `name:"match-index" default:"0" help:"Which occurrence of the selection text (0-based)."`
+	MatchCount    int    `name:"match-count" default:"1" help:"Total occurrences of the selection text in the page."`
 }
 
 func (c *CommentAddCmd) Run(cli *CLI) error {
 	siteHint, pageID, err := resolvePageRef(cli, c.Page)
 	if err != nil {
 		return err
-	}
-
-	if c.Inline {
-		return &output.Error{
-			Err:    "not_implemented",
-			Detail: "inline comments are not yet supported",
-			Hint:   "Omit --inline to add a footer comment.",
-			Code:   output.ExitGeneral,
-		}
 	}
 
 	present, raw, err := bodywrite.Read(cli.Stdin())
@@ -143,6 +138,33 @@ func (c *CommentAddCmd) Run(cli *CLI) error {
 		}
 	}
 
+	if c.Inline {
+		if c.SelectionText == "" {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "--inline requires --selection-text",
+				Hint:   "Pass --selection-text with the exact on-page text to anchor to.",
+				Code:   output.ExitGeneral,
+			}
+		}
+		if c.MatchCount < 1 {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "--match-count must be >= 1",
+				Hint:   "Set --match-count to the number of times the selection text appears on the page.",
+				Code:   output.ExitGeneral,
+			}
+		}
+		if c.MatchIndex < 0 || c.MatchIndex >= c.MatchCount {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "--match-index must be >= 0 and < --match-count",
+				Hint:   "Pass a 0-based --match-index within the number of occurrences.",
+				Code:   output.ExitGeneral,
+			}
+		}
+	}
+
 	client, _, err := cli.NewClientForSite(siteHint)
 	if err != nil {
 		return err
@@ -151,15 +173,41 @@ func (c *CommentAddCmd) Run(cli *CLI) error {
 	ctx, cancel := cli.Context()
 	defer cancel()
 
-	cm, err := client.AddFooterComment(ctx, pageID, confluence.WriteBody{
+	body := confluence.WriteBody{
 		Representation: confluence.APIBodyFormat(repr),
 		Value:          val,
-	})
+	}
+
+	p := cli.NewPrinter()
+
+	if c.Inline {
+		cm, err := client.AddInlineComment(ctx, pageID, body, confluence.InlineCommentSelection{
+			Text:       c.SelectionText,
+			MatchCount: c.MatchCount,
+			MatchIndex: c.MatchIndex,
+		})
+		if err != nil {
+			return cli.ClassifyError(err)
+		}
+		row := map[string]any{
+			"id":             cm.ID,
+			"page_id":        pageID,
+			"kind":           "inline",
+			"body_format":    repr,
+			"web_url":        cm.WebURL,
+			"selection_text": c.SelectionText,
+		}
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+		return p.PrintMeta(output.Meta{})
+	}
+
+	cm, err := client.AddFooterComment(ctx, pageID, body)
 	if err != nil {
 		return cli.ClassifyError(err)
 	}
 
-	p := cli.NewPrinter()
 	row := map[string]any{
 		"id":          cm.ID,
 		"page_id":     pageID,

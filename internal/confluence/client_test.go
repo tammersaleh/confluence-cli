@@ -2275,6 +2275,93 @@ func TestClient_AddFooterComment_NotFound(t *testing.T) {
 	}
 }
 
+func TestClient_AddInlineComment(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotBody   map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{
+			"id": "ic1",
+			"body": {"storage": {"value": "<p>Nice</p>"}},
+			"_links": {"webui": "/spaces/ENG/pages/123?focusedCommentId=ic1"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	cm, err := c.AddInlineComment(context.Background(), "123",
+		WriteBody{Representation: BodyFormatStorage, Value: "<p>Nice</p>"},
+		InlineCommentSelection{Text: "anchor me", MatchCount: 3, MatchIndex: 2})
+	if err != nil {
+		t.Fatalf("AddInlineComment() error: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/wiki/api/v2/inline-comments" {
+		t.Errorf("path = %q, want /wiki/api/v2/inline-comments", gotPath)
+	}
+	if gotBody["pageId"] != "123" {
+		t.Errorf("pageId = %v, want 123", gotBody["pageId"])
+	}
+	body, ok := gotBody["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("body = %v, want object", gotBody["body"])
+	}
+	if body["representation"] != "storage" || body["value"] != "<p>Nice</p>" {
+		t.Errorf("body = %v, want representation=storage value=<p>Nice</p>", body)
+	}
+	props, ok := gotBody["inlineCommentProperties"].(map[string]any)
+	if !ok {
+		t.Fatalf("inlineCommentProperties = %v, want object", gotBody["inlineCommentProperties"])
+	}
+	if props["textSelection"] != "anchor me" {
+		t.Errorf("textSelection = %v, want anchor me", props["textSelection"])
+	}
+	// JSON numbers decode to float64.
+	if props["textSelectionMatchCount"] != float64(3) {
+		t.Errorf("textSelectionMatchCount = %v, want 3", props["textSelectionMatchCount"])
+	}
+	if props["textSelectionMatchIndex"] != float64(2) {
+		t.Errorf("textSelectionMatchIndex = %v, want 2", props["textSelectionMatchIndex"])
+	}
+
+	if cm.ID != "ic1" {
+		t.Errorf("ID = %q, want ic1", cm.ID)
+	}
+	if cm.Kind != "inline" {
+		t.Errorf("Kind = %q, want inline", cm.Kind)
+	}
+	if cm.Body != "<p>Nice</p>" {
+		t.Errorf("Body = %q, want <p>Nice</p>", cm.Body)
+	}
+	wantURL := server.URL + "/wiki/spaces/ENG/pages/123?focusedCommentId=ic1"
+	if cm.WebURL != wantURL {
+		t.Errorf("WebURL = %q, want %q", cm.WebURL, wantURL)
+	}
+}
+
+func TestClient_AddInlineComment_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.AddInlineComment(context.Background(), "123",
+		WriteBody{Representation: BodyFormatStorage, Value: "x"},
+		InlineCommentSelection{Text: "foo", MatchCount: 1, MatchIndex: 0})
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
 func TestClient_AddLabel(t *testing.T) {
 	var (
 		gotMethod string
