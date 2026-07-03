@@ -376,6 +376,220 @@ func TestClient_ListPages_DefaultLimit(t *testing.T) {
 	}
 }
 
+func TestClient_ListChildren(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/pages/100/children" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"results": [
+				{"id": "1", "title": "Child One", "status": "current", "spaceId": "s1", "childPosition": 0},
+				{"id": "2", "title": "Child Two", "status": "current", "spaceId": "s1", "childPosition": 1}
+			],
+			"_links": {"next": "/wiki/api/v2/pages/100/children?limit=25&cursor=NEXT"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	pages, nextCursor, err := c.ListChildren(context.Background(), "100", "", 25)
+	if err != nil {
+		t.Fatalf("ListChildren() error: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("got %d pages, want 2", len(pages))
+	}
+	if pages[0].ID != "1" || pages[0].Title != "Child One" {
+		t.Errorf("pages[0] = %+v, want ID=1 Title=Child One", pages[0])
+	}
+	if pages[0].Type != "page" {
+		t.Errorf("pages[0].Type = %q, want page", pages[0].Type)
+	}
+	if pages[0].ParentID != "" {
+		t.Errorf("pages[0].ParentID = %q, want empty", pages[0].ParentID)
+	}
+	if nextCursor != "NEXT" {
+		t.Errorf("nextCursor = %q, want NEXT", nextCursor)
+	}
+}
+
+func TestClient_ListChildren_DefaultLimit(t *testing.T) {
+	var gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		w.Write([]byte(`{"results": []}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.ListChildren(context.Background(), "100", "", 0)
+	if err != nil {
+		t.Fatalf("ListChildren() error: %v", err)
+	}
+	if gotLimit != "25" {
+		t.Errorf("limit = %q, want 25", gotLimit)
+	}
+}
+
+func TestClient_ListChildren_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.ListChildren(context.Background(), "100", "", 25)
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_GetAncestors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/pages/100/ancestors" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"results": [
+				{"id": "1", "type": "page"},
+				{"id": "2", "type": "page"}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	ancestors, err := c.GetAncestors(context.Background(), "100")
+	if err != nil {
+		t.Fatalf("GetAncestors() error: %v", err)
+	}
+	if len(ancestors) != 2 {
+		t.Fatalf("got %d ancestors, want 2", len(ancestors))
+	}
+	if ancestors[0].ID != "1" || ancestors[0].Type != "page" {
+		t.Errorf("ancestors[0] = %+v, want ID=1 Type=page", ancestors[0])
+	}
+	if ancestors[1].ID != "2" {
+		t.Errorf("ancestors[1].ID = %q, want 2", ancestors[1].ID)
+	}
+}
+
+func TestClient_GetAncestors_Paginated(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/pages/100/ancestors" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		callCount++
+		if callCount == 1 {
+			w.Write([]byte(`{
+				"results": [{"id": "1", "type": "page"}],
+				"_links": {"next": "/wiki/api/v2/pages/100/ancestors?cursor=abc"}
+			}`))
+		} else {
+			w.Write([]byte(`{
+				"results": [{"id": "2", "type": "folder"}]
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	ancestors, err := c.GetAncestors(context.Background(), "100")
+	if err != nil {
+		t.Fatalf("GetAncestors() error: %v", err)
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 API calls, got %d", callCount)
+	}
+	if len(ancestors) != 2 {
+		t.Fatalf("got %d ancestors, want 2", len(ancestors))
+	}
+	if ancestors[0].ID != "1" || ancestors[1].ID != "2" {
+		t.Errorf("ancestors = %+v, want IDs 1 then 2", ancestors)
+	}
+	if ancestors[1].Type != "folder" {
+		t.Errorf("ancestors[1].Type = %q, want folder", ancestors[1].Type)
+	}
+}
+
+func TestClient_GetAncestors_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetAncestors(context.Background(), "100")
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_ListSpaces(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/spaces" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("keys") != "" {
+			t.Errorf("ListSpaces must not send a keys param, got %q", r.URL.Query().Get("keys"))
+		}
+		w.Write([]byte(`{
+			"results": [
+				{"id": "1", "key": "ENG", "name": "Engineering", "type": "global", "status": "current", "homepageId": "999"},
+				{"id": "2", "key": "OPS", "name": "Operations", "type": "global", "status": "current", "homepageId": "888"}
+			],
+			"_links": {"next": "/wiki/api/v2/spaces?limit=25&cursor=NEXT"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	spaces, nextCursor, err := c.ListSpaces(context.Background(), "", 25)
+	if err != nil {
+		t.Fatalf("ListSpaces() error: %v", err)
+	}
+	if len(spaces) != 2 {
+		t.Fatalf("got %d spaces, want 2", len(spaces))
+	}
+	if spaces[0].ID != "1" || spaces[0].Key != "ENG" || spaces[0].Name != "Engineering" {
+		t.Errorf("spaces[0] = %+v, want ID=1 Key=ENG Name=Engineering", spaces[0])
+	}
+	if spaces[0].Type != "global" {
+		t.Errorf("spaces[0].Type = %q, want global", spaces[0].Type)
+	}
+	if spaces[0].Status != "current" {
+		t.Errorf("spaces[0].Status = %q, want current", spaces[0].Status)
+	}
+	if spaces[0].HomepageID != "999" {
+		t.Errorf("spaces[0].HomepageID = %q, want 999", spaces[0].HomepageID)
+	}
+	if spaces[1].Key != "OPS" {
+		t.Errorf("spaces[1].Key = %q, want OPS", spaces[1].Key)
+	}
+	if nextCursor != "NEXT" {
+		t.Errorf("nextCursor = %q, want NEXT", nextCursor)
+	}
+}
+
+func TestClient_ListSpaces_DefaultLimit(t *testing.T) {
+	var gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		w.Write([]byte(`{"results": []}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.ListSpaces(context.Background(), "", 0)
+	if err != nil {
+		t.Fatalf("ListSpaces() error: %v", err)
+	}
+	if gotLimit != "25" {
+		t.Errorf("limit = %q, want 25", gotLimit)
+	}
+}
+
 func TestClient_GetPage_Storage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/wiki/api/v2/pages/123" {

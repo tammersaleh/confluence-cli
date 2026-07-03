@@ -486,6 +486,172 @@ func parseLinkHeaderNext(header string) string {
 	return ""
 }
 
+type childrenResponse struct {
+	Results []struct {
+		ID     string `json:"id"`
+		Title  string `json:"title"`
+		Status string `json:"status"`
+	} `json:"results"`
+	Links struct {
+		Next string `json:"next"`
+	} `json:"_links"`
+}
+
+// ListChildren returns exactly one API page of direct children of pageID. The
+// v2 children endpoint returns id/title/status/spaceId/childPosition but no
+// body and no reliable parentId, so ParentID is left empty (all results are
+// children of pageID anyway) and Type is always "page".
+func (c *client) ListChildren(ctx context.Context, pageID, cursor string, limit int) (pages []Page, nextCursor string, err error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	query := url.Values{}
+	query.Set("limit", fmt.Sprintf("%d", limit))
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+
+	path := fmt.Sprintf("/wiki/api/v2/pages/%s/children", pageID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, query)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, "", ErrPageNotFound
+		}
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result childrenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	pages = make([]Page, 0, len(result.Results))
+	for _, p := range result.Results {
+		pages = append(pages, Page{
+			ID:    p.ID,
+			Title: p.Title,
+			Type:  "page",
+		})
+	}
+
+	// Prefer the Link response header if present, else the body's _links.next.
+	if hdr := resp.Header.Get("Link"); hdr != "" {
+		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
+			return pages, cur, nil
+		}
+	}
+	return pages, cursorFromNext(result.Links.Next), nil
+}
+
+type ancestorsResponse struct {
+	Results []struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	} `json:"results"`
+	Links struct {
+		Next string `json:"next"`
+	} `json:"_links"`
+}
+
+// GetAncestors returns the ancestor chain of pageID, root-most first (per
+// Atlassian). The v2 ancestors endpoint returns limited fields (id, type;
+// often no title), so only ID and Type are populated. Ancestor chains are
+// short but pagination is followed if present.
+func (c *client) GetAncestors(ctx context.Context, pageID string) ([]Page, error) {
+	var ancestors []Page
+	path := fmt.Sprintf("/wiki/api/v2/pages/%s/ancestors", pageID)
+	query := url.Values{}
+
+	for {
+		resp, err := c.doRequest(ctx, http.MethodGet, path, query)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil, ErrPageNotFound
+			}
+			return nil, err
+		}
+
+		var result ancestorsResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("decoding response: %w", err)
+		}
+
+		// Prefer the Link header, else the body's _links.next.
+		next := result.Links.Next
+		if hdr := resp.Header.Get("Link"); hdr != "" {
+			if h := parseLinkHeaderNext(hdr); h != "" {
+				next = h
+			}
+		}
+		_ = resp.Body.Close()
+
+		for _, a := range result.Results {
+			ancestors = append(ancestors, Page{
+				ID:   a.ID,
+				Type: a.Type,
+			})
+		}
+
+		if next == "" {
+			break
+		}
+		nextURL, err := url.Parse(next)
+		if err != nil {
+			break
+		}
+		query = nextURL.Query()
+		path = nextURL.Path
+	}
+
+	return ancestors, nil
+}
+
+type listSpacesResponse struct {
+	Results []spaceResponse `json:"results"`
+	Links   struct {
+		Next string `json:"next"`
+	} `json:"_links"`
+}
+
+// ListSpaces returns exactly one API page of spaces (no key filter). nextCursor
+// comes from the Link header or the body's _links.next.
+func (c *client) ListSpaces(ctx context.Context, cursor string, limit int) (spaces []Space, nextCursor string, err error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	query := url.Values{}
+	query.Set("limit", fmt.Sprintf("%d", limit))
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+
+	resp, err := c.doRequest(ctx, http.MethodGet, "/wiki/api/v2/spaces", query)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result listSpacesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	spaces = make([]Space, 0, len(result.Results))
+	for _, s := range result.Results {
+		spaces = append(spaces, Space(s))
+	}
+
+	// Prefer the Link response header if present, else the body's _links.next.
+	if hdr := resp.Header.Get("Link"); hdr != "" {
+		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
+			return spaces, cur, nil
+		}
+	}
+	return spaces, cursorFromNext(result.Links.Next), nil
+}
+
 func (c *client) getPageParent(ctx context.Context, pageID string) (parentID, parentType string, err error) {
 	resp, err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/wiki/api/v2/pages/%s", pageID), nil)
 	if err != nil {

@@ -78,6 +78,21 @@ func (m *mockClient) GetPage(ctx context.Context, pageID string, format confluen
 	return nil, nil
 }
 
+func (m *mockClient) ListChildren(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Page, string, error) {
+	return nil, "", nil
+}
+
+func (m *mockClient) GetAncestors(ctx context.Context, pageID string) ([]confluence.Page, error) {
+	return nil, nil
+}
+
+func (m *mockClient) ListSpaces(ctx context.Context, cursor string, limit int) ([]confluence.Space, string, error) {
+	if m.space == nil {
+		return nil, "", nil
+	}
+	return []confluence.Space{*m.space}, "", nil
+}
+
 func TestSync_SingleLeafPage(t *testing.T) {
 	client := &mockClient{
 		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
