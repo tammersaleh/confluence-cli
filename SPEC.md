@@ -72,7 +72,7 @@ Fields named `*_ts`, `created_at`, or `modified_at` gain an `*_iso` sibling in R
 - `--fields` - comma-separated list limiting output to those top-level fields. Applies to data rows only, not `_meta`. Nested objects are returned whole when their parent field is selected; use `jq` for deeper access.
 - `--quiet` - suppress all stdout (data rows and the `_meta` trailer). The exit code conveys success/failure and fatal errors still print to stderr.
 - `--timeout` - per-command deadline for API work.
-- `--trace` - structured diagnostics to stderr as JSONL (per-page fetches, retries, latencies).
+- `--trace` - attach a JSON-lines diagnostics tracer to stderr. The plumbing is in place; per-request event emission (fetches, retries, latencies) arrives in a later release with the broadened client.
 
 ## Auth model
 
@@ -114,7 +114,7 @@ One-way sync of a Confluence space to local Markdown files under `<output-dir>`.
 - `--prune` - after syncing, remove files in the output directory that are no longer part of the space. `_attachments/` directories of version-skipped pages are protected.
 - `--dry-run` - report what would happen without writing.
 
-Human-readable progress and trace output go to stderr. Stdout carries a single summary object, then the trailer:
+Human-readable progress goes to stderr. Stdout carries a single summary object, then the trailer:
 
 ```jsonl
 $ confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs

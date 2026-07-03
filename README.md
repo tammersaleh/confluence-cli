@@ -82,7 +82,7 @@ Flags:
 - `--prune` - after syncing, remove files in the output directory no longer part of the space. `_attachments/` dirs of version-skipped pages are protected.
 - `--dry-run` - report what would happen without writing.
 - `--quiet` - suppress all stdout (summary and trailer). Rely on the exit code; fatal errors still print to stderr.
-- `--trace` - structured diagnostics to stderr as JSONL.
+- `--trace` - attach a JSON-lines diagnostics tracer to stderr. Per-request event emission lands in a later release.
 
 Accepts space URLs in these formats:
 

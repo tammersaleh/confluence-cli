@@ -104,7 +104,7 @@ old Cobra tool's `1 = config / 2 = auth / 3 = api / 4 = filesystem` codes
 Two commands ship today. Both honor `--quiet` and `--timeout`.
 
 - `confluence version` - emits the build version, then the trailer.
-- `confluence space sync <space-url> <output-dir>` - one-way space crawl to local Markdown. Flags: `--prune`, `--dry-run`, `--quiet`, `--timeout`, `--trace`. Progress and trace go to stderr; stdout carries a single summary object then the trailer.
+- `confluence space sync <space-url> <output-dir>` - one-way space crawl to local Markdown. Flags: `--prune`, `--dry-run`, `--quiet`, `--timeout`, `--trace`. Progress goes to stderr; stdout carries a single summary object then the trailer.
 
 The rest of the surface (`auth`, `page`, `attachment`, `search`, `comment`,
 `label`, `user`, and the write commands) is designed but not yet implemented.
@@ -114,7 +114,9 @@ See `SPEC.md`.
 
 `--site`, `--fields`, `--quiet`, `--timeout`, `--trace`. `Context()` on the CLI
 threads `--timeout` and `--trace` into a context every command's `Run` uses;
-`--trace` attaches a JSON-lines tracer to stderr.
+`--trace` attaches a JSON-lines tracer to the context. The domain client does
+not emit request events yet; that wiring lands in Phase 1 (see the plan's
+review follow-ups).
 
 ## Auth model
 
