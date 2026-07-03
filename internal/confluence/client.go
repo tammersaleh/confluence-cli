@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -11,13 +12,18 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/tammersaleh/confluence-sync/internal/httpx"
 )
 
 const (
-	maxRetries     = 5
-	baseRetryDelay = 500 * time.Millisecond
-	maxRetryDelay  = 30 * time.Second
+	maxRetries    = 5
+	maxRetryDelay = 30 * time.Second
 )
+
+// baseRetryDelay is a var (not const) so tests can shrink it to keep the retry
+// path fast. Runtime value is always 500ms.
+var baseRetryDelay = 500 * time.Millisecond
 
 func isRetryable(statusCode int) bool {
 	switch statusCode {
@@ -57,16 +63,42 @@ func NewClient(baseURL, email, apiToken string) Client {
 	}
 }
 
+// statusToError maps a non-2xx status to a *StatusError, or nil for 2xx.
+func statusToError(statusCode int, path string) *StatusError {
+	var sentinel error
+	switch {
+	case statusCode == http.StatusUnauthorized:
+		sentinel = ErrUnauthorized
+	case statusCode == http.StatusForbidden:
+		sentinel = ErrForbidden
+	case statusCode == http.StatusNotFound:
+		sentinel = ErrNotFound
+	case statusCode >= 400:
+		sentinel = ErrAPIError
+	default:
+		return nil
+	}
+	return &StatusError{StatusCode: statusCode, Endpoint: path, Err: sentinel}
+}
+
 func (c *client) doRequest(ctx context.Context, method, path string, query url.Values) (*http.Response, error) {
 	u := c.baseURL + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
 
+	tracer := httpx.TracerFrom(ctx)
+
 	var lastErr error
+	lastStatus := 0
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := retryDelay(attempt - 1)
+			tracer.Event("retry_wait", map[string]any{
+				"endpoint": path,
+				"attempt":  attempt + 1,
+				"delay_ms": delay.Milliseconds(),
+			})
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -81,38 +113,61 @@ func (c *client) doRequest(ctx context.Context, method, path string, query url.V
 		req.Header.Set("Authorization", c.authHeader)
 		req.Header.Set("Accept", "application/json")
 
+		start := time.Now()
 		resp, err := c.httpClient.Do(req)
+		latency := time.Since(start)
 		if err != nil {
 			lastErr = err
+			lastStatus = 0
+			tracer.Event("request", map[string]any{
+				"endpoint":   path,
+				"method":     method,
+				"attempt":    attempt + 1,
+				"status":     0,
+				"latency_ms": latency.Milliseconds(),
+				"error":      err.Error(),
+			})
 			continue
 		}
+
+		statusErr := statusToError(resp.StatusCode, path)
+		errStr := ""
+		if statusErr != nil {
+			errStr = statusErr.Error()
+		}
+		tracer.Event("request", map[string]any{
+			"endpoint":   path,
+			"method":     method,
+			"attempt":    attempt + 1,
+			"status":     resp.StatusCode,
+			"latency_ms": latency.Milliseconds(),
+			"error":      errStr,
+		})
 
 		if isRetryable(resp.StatusCode) {
 			_ = resp.Body.Close()
-			lastErr = fmt.Errorf("%w: status %d", ErrAPIError, resp.StatusCode)
+			lastErr = statusErr
+			lastStatus = resp.StatusCode
 			continue
 		}
 
-		switch resp.StatusCode {
-		case http.StatusUnauthorized:
+		if statusErr != nil {
 			_ = resp.Body.Close()
-			return nil, ErrUnauthorized
-		case http.StatusForbidden:
-			_ = resp.Body.Close()
-			return nil, ErrForbidden
-		case http.StatusNotFound:
-			_ = resp.Body.Close()
-			return nil, ErrSpaceNotFound
-		}
-
-		if resp.StatusCode >= 400 {
-			_ = resp.Body.Close()
-			return nil, fmt.Errorf("%w: status %d", ErrAPIError, resp.StatusCode)
+			return nil, statusErr
 		}
 
 		return resp, nil
 	}
 
+	// Retry exhaustion. If the last retryable response was a 429, surface a
+	// typed rate-limit error; otherwise wrap the last 5xx/transport error.
+	if lastStatus == http.StatusTooManyRequests {
+		wrapped := lastErr
+		if wrapped == nil {
+			wrapped = fmt.Errorf("%w: status %d", ErrAPIError, http.StatusTooManyRequests)
+		}
+		return nil, &httpx.RateLimitError{Endpoint: path, Retries: maxRetries, Err: wrapped}
+	}
 	return nil, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
 }
 
@@ -130,6 +185,9 @@ func (c *client) GetSpace(ctx context.Context, spaceKey string) (*Space, error) 
 
 	resp, err := c.doRequest(ctx, http.MethodGet, "/wiki/api/v2/spaces", query)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrSpaceNotFound
+		}
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -177,6 +235,9 @@ func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
 	for {
 		resp, err := c.doRequest(ctx, http.MethodGet, path, query)
 		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil, ErrSpaceNotFound
+			}
 			return nil, err
 		}
 
@@ -261,6 +322,9 @@ func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
 func (c *client) getPageParent(ctx context.Context, pageID string) (parentID, parentType string, err error) {
 	resp, err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/wiki/api/v2/pages/%s", pageID), nil)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return "", "", ErrPageNotFound
+		}
 		return "", "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -299,6 +363,9 @@ func (c *client) GetPageContent(ctx context.Context, pageID string) (*PageConten
 
 	resp, err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/wiki/api/v2/pages/%s", pageID), query)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrPageNotFound
+		}
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -349,6 +416,9 @@ func (c *client) GetAttachments(ctx context.Context, pageID string) ([]Attachmen
 	for {
 		resp, err := c.doRequest(ctx, http.MethodGet, path, query)
 		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil, ErrPageNotFound
+			}
 			return nil, err
 		}
 
@@ -422,10 +492,17 @@ func (c *client) DownloadAttachment(ctx context.Context, attachment Attachment) 
 	}
 	u := c.baseURL + downloadPath
 
+	tracer := httpx.TracerFrom(ctx)
+
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := retryDelay(attempt - 1)
+			tracer.Event("retry_wait", map[string]any{
+				"endpoint": downloadPath,
+				"attempt":  attempt + 1,
+				"delay_ms": delay.Milliseconds(),
+			})
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -439,11 +516,29 @@ func (c *client) DownloadAttachment(ctx context.Context, attachment Attachment) 
 		}
 		req.Header.Set("Authorization", c.authHeader)
 
+		start := time.Now()
 		resp, err := c.httpClient.Do(req)
+		latency := time.Since(start)
 		if err != nil {
 			lastErr = err
+			tracer.Event("request", map[string]any{
+				"endpoint":   downloadPath,
+				"method":     http.MethodGet,
+				"attempt":    attempt + 1,
+				"status":     0,
+				"latency_ms": latency.Milliseconds(),
+				"error":      err.Error(),
+			})
 			continue
 		}
+
+		tracer.Event("request", map[string]any{
+			"endpoint":   downloadPath,
+			"method":     http.MethodGet,
+			"attempt":    attempt + 1,
+			"status":     resp.StatusCode,
+			"latency_ms": latency.Milliseconds(),
+		})
 
 		if isRetryable(resp.StatusCode) {
 			_ = resp.Body.Close()

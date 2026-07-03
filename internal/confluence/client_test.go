@@ -1,11 +1,17 @@
 package confluence
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/tammersaleh/confluence-sync/internal/httpx"
 )
 
 func TestClient_GetSpace(t *testing.T) {
@@ -75,7 +81,7 @@ func TestClient_GetSpace(t *testing.T) {
 			space, err := c.GetSpace(context.Background(), tt.spaceKey)
 
 			if tt.wantErr != nil {
-				if err != tt.wantErr {
+				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("GetSpace() error = %v, wantErr %v", err, tt.wantErr)
 				}
 				return
@@ -596,6 +602,132 @@ func TestClient_GetPages_ResolvesChainedNonPageParents(t *testing.T) {
 	}
 	if !found["f1"] {
 		t.Error("expected f1 in pages")
+	}
+}
+
+func TestClient_StatusError_Unauthorized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetSpace(context.Background(), "ENG")
+
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected ErrUnauthorized, got %v", err)
+	}
+	var se *StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *StatusError, got %T", err)
+	}
+	if se.StatusCode != http.StatusUnauthorized {
+		t.Errorf("StatusCode = %d, want 401", se.StatusCode)
+	}
+	if se.Endpoint != "/wiki/api/v2/spaces" {
+		t.Errorf("Endpoint = %q, want /wiki/api/v2/spaces", se.Endpoint)
+	}
+}
+
+func TestClient_StatusError_Forbidden(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetSpace(context.Background(), "ENG")
+
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+	var se *StatusError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *StatusError, got %T", err)
+	}
+	if se.StatusCode != http.StatusForbidden {
+		t.Errorf("StatusCode = %d, want 403", se.StatusCode)
+	}
+}
+
+func TestClient_GetSpace_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetSpace(context.Background(), "ENG")
+
+	if !errors.Is(err, ErrSpaceNotFound) {
+		t.Fatalf("expected ErrSpaceNotFound, got %v", err)
+	}
+}
+
+func TestClient_GetAttachments_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetAttachments(context.Background(), "123")
+
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_RateLimitExhaustion(t *testing.T) {
+	old := baseRetryDelay
+	baseRetryDelay = time.Millisecond
+	defer func() { baseRetryDelay = old }()
+
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetSpace(context.Background(), "ENG")
+
+	var rl *httpx.RateLimitError
+	if !errors.As(err, &rl) {
+		t.Fatalf("expected *httpx.RateLimitError, got %T: %v", err, err)
+	}
+	if rl.Endpoint != "/wiki/api/v2/spaces" {
+		t.Errorf("Endpoint = %q, want /wiki/api/v2/spaces", rl.Endpoint)
+	}
+	if rl.Retries != maxRetries {
+		t.Errorf("Retries = %d, want %d", rl.Retries, maxRetries)
+	}
+	if calls != maxRetries+1 {
+		t.Errorf("server calls = %d, want %d", calls, maxRetries+1)
+	}
+}
+
+func TestClient_TraceEmission(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"results": [{"id": "1", "key": "ENG", "name": "Engineering"}]}`))
+	}))
+	defer server.Close()
+
+	var buf bytes.Buffer
+	ctx := httpx.WithTracer(context.Background(), httpx.NewJSONLinesTracer(&buf))
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	if _, err := c.GetSpace(ctx, "ENG"); err != nil {
+		t.Fatalf("GetSpace() error: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, `"kind":"request"`) {
+		t.Errorf("expected a request trace event, got: %s", out)
+	}
+	if !strings.Contains(out, `"endpoint":"/wiki/api/v2/spaces"`) {
+		t.Errorf("expected endpoint in trace event, got: %s", out)
 	}
 }
 

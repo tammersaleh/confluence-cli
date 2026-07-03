@@ -3,15 +3,33 @@ package confluence
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 )
 
 var (
 	ErrSpaceNotFound = errors.New("space not found")
+	ErrPageNotFound  = errors.New("page not found") // used by GetPage in a later commit
+	ErrNotFound      = errors.New("not found")      // generic 404 from doRequest
 	ErrUnauthorized  = errors.New("unauthorized")
 	ErrForbidden     = errors.New("forbidden")
 	ErrAPIError      = errors.New("API error")
 )
+
+// StatusError is a typed transport error returned by doRequest for non-2xx
+// responses. Err is one of ErrUnauthorized/ErrForbidden/ErrNotFound/ErrAPIError,
+// so errors.Is against those sentinels works via Unwrap.
+type StatusError struct {
+	StatusCode int
+	Endpoint   string // the API path, e.g. /wiki/api/v2/pages/123
+	Err        error
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%v: status %d on %s", e.Err, e.StatusCode, e.Endpoint)
+}
+
+func (e *StatusError) Unwrap() error { return e.Err }
 
 type Space struct {
 	ID   string
