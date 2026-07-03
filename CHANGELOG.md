@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.1.0](https://github.com/tammersaleh/confluence-sync/compare/v1.0.0...v1.1.0) (2026-07-03)
+
+
+### Features
+
+* add confluenceurl parser ([35f3426](https://github.com/tammersaleh/confluence-sync/commit/35f3426487f464c6cea5dbc619389cb85f21553b))
+* add ListPages and GetPage domain primitives ([d989a21](https://github.com/tammersaleh/confluence-sync/commit/d989a21356b3d0559bbd5e1588261ac0c0a2f181))
+* typed transport errors, trace emission, rate-limit exit code ([570b415](https://github.com/tammersaleh/confluence-sync/commit/570b4156eb7f6b4472cc2e1238a2f56781c29933))
+
+
+### Bug Fixes
+
+* classify page_not_found and preserve error endpoint ([c90617c](https://github.com/tammersaleh/confluence-sync/commit/c90617c84fca4138265d369ce86545a99aa14f10))
+* confluenceurl keeps port and accepts space overview URLs ([097b9b3](https://github.com/tammersaleh/confluence-sync/commit/097b9b3020e1ca73af15e0dea7c9d8e9dd2a65b1))
+
 ## 1.0.0 (2026-07-03)
 
 
