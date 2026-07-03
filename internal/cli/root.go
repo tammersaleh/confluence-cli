@@ -36,6 +36,10 @@ type CLI struct {
 	Space      SpaceCmd      `cmd:"" help:"Confluence spaces."`
 	Page       PageCmd       `cmd:"" aliases:"pages" help:"Read pages."`
 	Attachment AttachmentCmd `cmd:"" aliases:"attachments" help:"Page attachments."`
+	Search     SearchCmd     `cmd:"" help:"Search with CQL."`
+	Comment    CommentCmd    `cmd:"" aliases:"comments" help:"Read page comments."`
+	Label      LabelCmd      `cmd:"" aliases:"labels" help:"Read page labels."`
+	User       UserCmd       `cmd:"" aliases:"users" help:"Read user information."`
 	Auth       AuthCmd       `cmd:"" help:"Manage authentication."`
 }
 
@@ -222,6 +226,13 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Err:    "attachment_not_found",
 			Detail: err.Error(),
 			Hint:   "Check the attachment ID. List a page's attachments with 'confluence attachment list <page-id|url>'.",
+			Code:   output.ExitGeneral,
+		}
+	case errors.Is(err, confluence.ErrUserNotFound):
+		oErr = &output.Error{
+			Err:    "user_not_found",
+			Detail: err.Error(),
+			Hint:   "Check the accountId. Find it via 'confluence user current' or a page's author_id.",
 			Code:   output.ExitGeneral,
 		}
 	case errors.Is(err, confluence.ErrAPIError):
