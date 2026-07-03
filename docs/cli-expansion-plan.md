@@ -253,6 +253,30 @@ format and validation model before writing command code.
 - Rewrite `README.md` and `CLAUDE.md` for the new scope, workflow, and release
   discipline (conventional commits drive releases).
 
+## Phase 0 status and review follow-ups (do in Phase 1)
+
+Phase 0 landed on branch `phase-0-scaffold`: `internal/output`, `internal/auth`
+(canonical-site-keyed store), `internal/httpx` (Tracer + generic ClassifyError;
+no Paginate[T] yet), `internal/cli` (Kong root + `version` + `space sync`
+passthrough), Kong entry, and the full dist/CI/lint tooling. `mise run check`
+(test + lint + build) is green; golangci-lint pinned to v2 (v1.64.x predates Go
+1.25). Two independent reviews (a code-reviewer sub-agent and Codex) passed after
+fixes; see below for what was deferred here on purpose.
+
+Carry these into Phase 1, when the domain client is broadened:
+
+- Wire the `httpx` tracer into `confluence` `doRequest`/`DownloadAttachment` so
+  `--trace` actually emits during `space sync` (it attaches at the CLI layer but
+  the domain client does not emit yet - like slack-cli's partially-instrumented
+  trace).
+- Return `*httpx.RateLimitError` on exhausted 429 retries so exit code 3 becomes
+  reachable, and reorder `cli.ClassifyError` to match typed transport errors
+  before the `confluence` sentinels they may wrap (a RateLimitError wrapping
+  `ErrAPIError` would otherwise classify as exit 1).
+- Revisit the `space sync` summary shape (`synced:true`) when Phase 2's typed
+  reporter lands - emit per-item events and a completeness-aware summary rather
+  than an unconditional truthy row.
+
 ## Open questions
 
 - Confluence has no aggressive rate-limit culture like Slack; keep the retry/
