@@ -38,3 +38,7 @@ sa/
 # .vscode/
 sa-space
 sync-sa-space.sh
+
+# Local Claude Code config (user-specific, not shared)
+CLAUDE.local.md
+.claude/CLAUDE.local.md
