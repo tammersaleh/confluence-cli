@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.0](https://github.com/tammersaleh/confluence-sync/compare/v1.5.0...v1.6.0) (2026-07-03)
+
+
+### Features
+
+* add search, comment list, label list, user current/info ([f5c99d4](https://github.com/tammersaleh/confluence-sync/commit/f5c99d4f24080038ea5f33d3ef55487524f67ea0))
+* add Search, comment, label, and user domain methods ([0b7c620](https://github.com/tammersaleh/confluence-sync/commit/0b7c620998db0199a6e4b4b46e9ecb59fd8e1a81))
+
 ## [1.5.0](https://github.com/tammersaleh/confluence-sync/compare/v1.4.0...v1.5.0) (2026-07-03)
 
 
