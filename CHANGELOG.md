@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.0](https://github.com/tammersaleh/confluence-sync/compare/v1.2.0...v1.3.0) (2026-07-03)
+
+
+### Features
+
+* add attachment URL resolver to the converter ([c93a2ba](https://github.com/tammersaleh/confluence-sync/commit/c93a2ba7ceaa11c422cbfac414b3e28640e816b4))
+* add page get command (storage/adf/view/markdown) ([b181b40](https://github.com/tammersaleh/confluence-sync/commit/b181b40aaa2eb25047016a34ee2c5637c07876fa))
+* add page list command ([410ca9a](https://github.com/tammersaleh/confluence-sync/commit/410ca9ac02df00a16b4e7f0529ff576f891eea19))
+
 ## [1.2.0](https://github.com/tammersaleh/confluence-sync/compare/v1.1.0...v1.2.0) (2026-07-03)
 
 
