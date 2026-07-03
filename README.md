@@ -1,67 +1,101 @@
 # confluence-sync
 
-A CLI tool that syncs Confluence space pages to local Markdown files.
+An agent-first Confluence CLI. The binary is `confluence`; the repository and Go
+module stay `confluence-sync`. Output is JSONL (one JSON object per line);
+commands are non-interactive and scriptable, built for LLM agents and CI.
+
+Two commands ship today: `version` and `space sync`. A wider read/write surface
+(pages, attachments, search, comments, labels, users, and authoring) is designed
+but not yet implemented. See `SPEC.md` for the full contract and planned
+commands, and `skills/confluence-cli/SKILL.md` for the agent skill.
 
 ## Installation
 
 ```bash
-go install github.com/tammersaleh/confluence-sync/cmd/confluence-sync@latest
+brew install --cask tammersaleh/tap/confluence-cli
 ```
 
-## Usage
+Or with Go:
 
-```
-confluence-sync <space-url> <output-dir> [flags]
-
-Arguments:
-  space-url             Confluence space URL (e.g., https://acme.atlassian.net/wiki/spaces/ENG)
-  output-dir            Output directory for synced files
-
-Flags:
-      --prune           Remove stale local files after sync
-      --dry-run         Show what would be synced without writing files
-  -q, --quiet           Suppress progress output
-  -h, --help            Help
+```bash
+go install github.com/tammersaleh/confluence-sync/cmd/confluence@latest
 ```
 
-### Configuration
+## Auth
 
-Authentication via environment variables:
+API token + email over HTTP Basic. Set environment variables:
 
 | Variable | Description |
 |----------|-------------|
-| `ATLASSIAN_API_KEY` | API token |
-| `ATLASSIAN_API_EMAIL` | Account email |
+| `CONFLUENCE_SITE` | Site base URL (e.g. `https://acme.atlassian.net`) |
+| `CONFLUENCE_EMAIL` | Atlassian account email |
+| `CONFLUENCE_API_TOKEN` | API token |
 
-### Example
+`ATLASSIAN_SITE` / `ATLASSIAN_API_EMAIL` / `ATLASSIAN_API_KEY` work as
+compatibility aliases. Stored credentials at
+`~/.config/confluence-cli/credentials.json` are also supported; the
+`confluence auth login` subcommand to manage them is planned but not yet
+available, so set env vars for now.
 
 ```bash
-export ATLASSIAN_API_KEY=your-api-token
-export ATLASSIAN_API_EMAIL=user@acme.com
-confluence-sync https://acme.atlassian.net/wiki/spaces/ENG ./docs
+export CONFLUENCE_EMAIL=user@acme.com
+export CONFLUENCE_API_TOKEN=your-api-token
 ```
 
-Accepts URLs in these formats:
+## Commands
+
+Both available commands honor `--quiet` and `--timeout`. Every command ends with
+a `_meta` trailer line.
+
+### version
+
+```bash
+confluence version
+```
+
+```jsonl
+{"version":"0.1.0"}
+{"_meta":{"has_more":false}}
+```
+
+### space sync
+
+One-way sync of a Confluence space to local Markdown files. This is a full-space
+crawl. Human-readable progress goes to stderr; stdout carries a single summary
+object then the trailer.
+
+```bash
+confluence space sync <space-url> <output-dir> [--prune] [--dry-run]
+```
+
+```bash
+confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs
+```
+
+```jsonl
+{"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":false}
+{"_meta":{"has_more":false}}
+```
+
+Flags:
+
+- `--prune` - after syncing, remove files in the output directory no longer part of the space. `_attachments/` dirs of version-skipped pages are protected.
+- `--dry-run` - report what would happen without writing.
+- `--quiet` - suppress all stdout (summary and trailer). Rely on the exit code; fatal errors still print to stderr.
+- `--trace` - structured diagnostics to stderr as JSONL.
+
+Accepts space URLs in these formats:
 
 - `https://acme.atlassian.net/wiki/spaces/ENG`
 - `https://acme.atlassian.net/wiki/spaces/ENG/overview`
 - `https://acme.atlassian.net/wiki/spaces/ENG/pages/...`
 
-### Exit Codes
+## Sync behavior
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | Configuration error |
-| 2 | Authentication failure |
-| 3 | API error |
-| 4 | Filesystem error |
+Pages are converted from Confluence storage format to Markdown. The page
+hierarchy is preserved as a directory structure.
 
-## Behavior
-
-Pages are converted from Confluence storage format to Markdown. The page hierarchy is preserved as a directory structure.
-
-### Directory Structure
+### Directory structure
 
 Given a Confluence space with this hierarchy:
 
@@ -92,7 +126,8 @@ output/
     └── incident-response.md
 ```
 
-Pages with children get their own directory with content in `index.md`. Leaf pages are single `.md` files.
+Pages with children (or attachments) get their own directory with content in
+`index.md`. Leaf pages without attachments are single `.md` files.
 
 ### Frontmatter
 
@@ -112,45 +147,48 @@ modified_at: "2024-06-20T14:45:00.000Z"
 
 ### Attachments
 
-Attachments are stored in `_attachments/` alongside their parent page's content. Markdown references are rewritten to point to local paths:
+Attachments are stored in `_attachments/` alongside their parent page's content,
+and Markdown references are rewritten to local paths:
 
 ```markdown
 ![diagram](_attachments/diagram.png)
 ```
 
-A leaf page with attachments is promoted to a directory:
+A leaf page with attachments is promoted to a directory with `index.md` plus
+`_attachments/`.
 
-```
-api-design/
-├── index.md
-└── _attachments/
-    └── openapi.yaml
-```
+### Incremental sync
 
-### Incremental Sync
+On subsequent runs, the `version` field in each file's frontmatter is compared
+against the Confluence API and unchanged pages are skipped. With `--prune`, stale
+local files (pages deleted or renamed in Confluence) are removed after sync;
+attachments of version-skipped pages are left alone since their attachment list
+wasn't re-fetched.
 
-On subsequent runs, the `version` field in each file's frontmatter is compared against the Confluence API. Unchanged pages are skipped.
+### Filename sanitization
 
-With `--prune`, stale local files (pages deleted or renamed in Confluence) are removed after sync. Attachments of version-skipped pages are left alone since their attachment list wasn't re-fetched.
+Page titles become filesystem-safe names: lowercased, spaces to hyphens,
+characters outside `[a-z0-9-]` removed, repeated hyphens collapsed, leading and
+trailing hyphens trimmed. Collisions get `-2`, `-3`, etc. suffixes.
 
-### Filename Sanitization
+## Exit codes
 
-Page titles are converted to filesystem-safe names:
-
-- Lowercase
-- Spaces → hyphens
-- Remove characters not in `[a-z0-9-]`
-- Collapse multiple hyphens
-- Trim leading/trailing hyphens
-
-Collisions are resolved by appending `-2`, `-3`, etc.
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error (including partial failure) |
+| 2 | Authentication error |
+| 3 | Rate limited |
+| 4 | Network error |
 
 ## Development
 
 ```bash
-mise run test          # Run tests
-mise run test:race     # With race detector
-mise run test:cover    # With coverage report
-mise run lint          # Run golangci-lint
-mise run build         # Build binary
+mise run check         # test + lint + build (use this by default)
+mise run test          # unit tests only
+mise run test:race     # with race detector
+mise run lint          # golangci-lint
+mise run build         # build the confluence binary
 ```
+
+Requires Go 1.25. See `CLAUDE.md` for architecture and the release workflow.
