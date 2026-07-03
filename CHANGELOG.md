@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.8.0](https://github.com/tammersaleh/confluence-sync/compare/v1.7.0...v1.8.0) (2026-07-03)
+
+
+### Features
+
+* add inline comments to comment add ([0672441](https://github.com/tammersaleh/confluence-sync/commit/06724414166e44026d9c7fe275006ae1173972c3))
+* add markdown body format for writes ([d122261](https://github.com/tammersaleh/confluence-sync/commit/d1222612119aaaa01f40b38e0710d211a6df58bd))
+
 ## [1.7.0](https://github.com/tammersaleh/confluence-sync/compare/v1.6.0...v1.7.0) (2026-07-03)
 
 
