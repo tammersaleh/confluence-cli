@@ -32,10 +32,11 @@ type CLI struct {
 	credentialsPath string
 	ctx             context.Context
 
-	Version VersionCmd `cmd:"" help:"Show version."`
-	Space   SpaceCmd   `cmd:"" help:"Confluence spaces."`
-	Page    PageCmd    `cmd:"" aliases:"pages" help:"Read pages."`
-	Auth    AuthCmd    `cmd:"" help:"Manage authentication."`
+	Version    VersionCmd    `cmd:"" help:"Show version."`
+	Space      SpaceCmd      `cmd:"" help:"Confluence spaces."`
+	Page       PageCmd       `cmd:"" aliases:"pages" help:"Read pages."`
+	Attachment AttachmentCmd `cmd:"" aliases:"attachments" help:"Page attachments."`
+	Auth       AuthCmd       `cmd:"" help:"Manage authentication."`
 }
 
 // NewClientForSite resolves credentials for the given site hint (a canonical
@@ -214,6 +215,13 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Err:    "space_not_found",
 			Detail: err.Error(),
 			Hint:   "Check the space key/URL. List spaces with 'confluence space list' (available in a later release).",
+			Code:   output.ExitGeneral,
+		}
+	case errors.Is(err, confluence.ErrAttachmentNotFound):
+		oErr = &output.Error{
+			Err:    "attachment_not_found",
+			Detail: err.Error(),
+			Hint:   "Check the attachment ID. List a page's attachments with 'confluence attachment list <page-id|url>'.",
 			Code:   output.ExitGeneral,
 		}
 	case errors.Is(err, confluence.ErrAPIError):

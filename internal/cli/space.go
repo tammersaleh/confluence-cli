@@ -6,6 +6,7 @@ import (
 
 	"github.com/tammersaleh/confluence-sync/internal/auth"
 	"github.com/tammersaleh/confluence-sync/internal/confluence"
+	"github.com/tammersaleh/confluence-sync/internal/confluenceurl"
 	"github.com/tammersaleh/confluence-sync/internal/filesystem"
 	"github.com/tammersaleh/confluence-sync/internal/output"
 	"github.com/tammersaleh/confluence-sync/internal/sync"
@@ -13,6 +14,7 @@ import (
 
 type SpaceCmd struct {
 	Sync SpaceSyncCmd `cmd:"" help:"Sync a Confluence space to local Markdown files."`
+	Info SpaceInfoCmd `cmd:"" help:"Show space details."`
 }
 
 type SpaceSyncCmd struct {
@@ -116,4 +118,135 @@ func (c *SpaceSyncCmd) Run(cli *CLI) error {
 		return err
 	}
 	return p.PrintMeta(output.Meta{})
+}
+
+type SpaceInfoCmd struct {
+	Refs []string `arg:"" name:"key-id-or-url" help:"Space keys, IDs, or URLs (one site per invocation)."`
+}
+
+func (c *SpaceInfoCmd) Run(cli *CLI) error {
+	// spaceLookup binds each caller input to the resolved lookup. byID selects
+	// GetSpaceByID (a numeric id) over GetSpace (a space key).
+	type spaceLookup struct {
+		input string
+		byID  bool
+		value string
+	}
+	var lookups []spaceLookup
+	var urlRefs []confluenceurl.Ref
+	var siteURLArg string // a raw URL arg, used for --site match reporting
+
+	for _, arg := range c.Refs {
+		r, matched, perr := confluenceurl.Parse(arg)
+		if matched && perr != nil {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: perr.Error(),
+				Hint:   "Pass a space key (e.g. ENG), a numeric space id, or a space URL (…/wiki/spaces/ENG).",
+				Input:  arg,
+				Code:   output.ExitGeneral,
+			}
+		}
+		if !matched {
+			// Bare arg: all-digits is a space id, otherwise a space key.
+			lookups = append(lookups, spaceLookup{input: arg, byID: isDigits(arg), value: arg})
+			continue
+		}
+		// A URL. Only space and page URLs carry a space key.
+		if r.Kind != confluenceurl.KindSpace && r.Kind != confluenceurl.KindPage || r.SpaceKey == "" {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "URL does not identify a space",
+				Hint:   "Pass a space key (e.g. ENG), a numeric space id, or a space URL (…/wiki/spaces/ENG).",
+				Input:  arg,
+				Code:   output.ExitGeneral,
+			}
+		}
+		urlRefs = append(urlRefs, r)
+		siteURLArg = arg
+		lookups = append(lookups, spaceLookup{input: arg, byID: false, value: r.SpaceKey})
+	}
+
+	siteHint := ""
+	if len(urlRefs) > 0 {
+		site, cerr := confluenceurl.CommonSite(urlRefs)
+		if cerr != nil {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "all spaces must be on one site",
+				Hint:   "Split into one invocation per site.",
+				Code:   output.ExitGeneral,
+			}
+		}
+		siteHint = site
+		if cli.Site != "" {
+			if err := requireSiteMatch(cli.Site, siteURLArg); err != nil {
+				return err
+			}
+		}
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	p := cli.NewPrinter()
+	errCount := 0
+	for _, l := range lookups {
+		var space *confluence.Space
+		var lerr error
+		if l.byID {
+			space, lerr = client.GetSpaceByID(ctx, l.value)
+		} else {
+			space, lerr = client.GetSpace(ctx, l.value)
+		}
+		if lerr != nil {
+			oErr := cli.ClassifyError(lerr)
+			oErr.Input = l.input
+			if err := p.PrintItem(oErr.AsItem()); err != nil {
+				return err
+			}
+			errCount++
+			continue
+		}
+
+		row := map[string]any{
+			"input":       l.input,
+			"id":          space.ID,
+			"key":         space.Key,
+			"name":        space.Name,
+			"type":        space.Type,
+			"status":      space.Status,
+			"homepage_id": space.HomepageID,
+		}
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+	}
+
+	if err := p.PrintMeta(output.Meta{ErrorCount: errCount}); err != nil {
+		return err
+	}
+	if errCount > 0 {
+		return &output.ExitError{Code: output.ExitGeneral}
+	}
+	return nil
+}
+
+// isDigits reports whether s is non-empty and all ASCII digits. A numeric space
+// arg is looked up by id; anything else is treated as a space key.
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
