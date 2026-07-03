@@ -8,12 +8,13 @@ import (
 )
 
 var (
-	ErrSpaceNotFound = errors.New("space not found")
-	ErrPageNotFound  = errors.New("page not found") // used by GetPage in a later commit
-	ErrNotFound      = errors.New("not found")      // generic 404 from doRequest
-	ErrUnauthorized  = errors.New("unauthorized")
-	ErrForbidden     = errors.New("forbidden")
-	ErrAPIError      = errors.New("API error")
+	ErrSpaceNotFound      = errors.New("space not found")
+	ErrPageNotFound       = errors.New("page not found")       // used by GetPage in a later commit
+	ErrAttachmentNotFound = errors.New("attachment not found") // 404 from attachment-by-id lookups
+	ErrNotFound           = errors.New("not found")            // generic 404 from doRequest
+	ErrUnauthorized       = errors.New("unauthorized")
+	ErrForbidden          = errors.New("forbidden")
+	ErrAPIError           = errors.New("API error")
 )
 
 // StatusError is a typed transport error returned by doRequest for non-2xx
@@ -38,9 +39,12 @@ type CurrentUser struct {
 }
 
 type Space struct {
-	ID   string
-	Key  string
-	Name string
+	ID         string
+	Key        string
+	Name       string
+	Type       string // "global", "personal", etc.
+	Status     string // "current", "archived"
+	HomepageID string // ID of the space's homepage
 }
 
 type Page struct {
@@ -98,11 +102,13 @@ type PageDetail struct {
 type Client interface {
 	GetCurrentUser(ctx context.Context) (*CurrentUser, error)
 	GetSpace(ctx context.Context, spaceKey string) (*Space, error)
+	GetSpaceByID(ctx context.Context, spaceID string) (*Space, error)
 	GetPages(ctx context.Context, spaceID string) ([]Page, error)
 	ListPages(ctx context.Context, spaceID, cursor string, limit int) (pages []Page, nextCursor string, err error)
 	GetPageContent(ctx context.Context, pageID string) (*PageContent, error)
 	GetPage(ctx context.Context, pageID string, format APIBodyFormat) (*PageDetail, error)
 	GetAttachments(ctx context.Context, pageID string) ([]Attachment, error)
+	GetAttachmentByID(ctx context.Context, attachmentID string) (*Attachment, error)
 	DownloadAttachment(ctx context.Context, attachment Attachment) (io.ReadCloser, error)
 	GetContentParent(ctx context.Context, id string, contentType string) (*Page, error)
 }

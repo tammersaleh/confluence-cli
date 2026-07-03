@@ -202,12 +202,17 @@ func (c *client) GetCurrentUser(ctx context.Context) (*CurrentUser, error) {
 	}, nil
 }
 
+type spaceResponse struct {
+	ID         string `json:"id"`
+	Key        string `json:"key"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Status     string `json:"status"`
+	HomepageID string `json:"homepageId"`
+}
+
 type spacesResponse struct {
-	Results []struct {
-		ID   string `json:"id"`
-		Key  string `json:"key"`
-		Name string `json:"name"`
-	} `json:"results"`
+	Results []spaceResponse `json:"results"`
 }
 
 func (c *client) GetSpace(ctx context.Context, spaceKey string) (*Space, error) {
@@ -234,9 +239,39 @@ func (c *client) GetSpace(ctx context.Context, spaceKey string) (*Space, error) 
 
 	s := result.Results[0]
 	return &Space{
-		ID:   s.ID,
-		Key:  s.Key,
-		Name: s.Name,
+		ID:         s.ID,
+		Key:        s.Key,
+		Name:       s.Name,
+		Type:       s.Type,
+		Status:     s.Status,
+		HomepageID: s.HomepageID,
+	}, nil
+}
+
+// GetSpaceByID fetches a single space by its numeric ID via the
+// /wiki/api/v2/spaces/{id} endpoint. A 404 maps to ErrSpaceNotFound.
+func (c *client) GetSpaceByID(ctx context.Context, spaceID string) (*Space, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/wiki/api/v2/spaces/%s", spaceID), nil)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrSpaceNotFound
+		}
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result spaceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return &Space{
+		ID:         result.ID,
+		Key:        result.Key,
+		Name:       result.Name,
+		Type:       result.Type,
+		Status:     result.Status,
+		HomepageID: result.HomepageID,
 	}, nil
 }
 
@@ -665,6 +700,38 @@ func (c *client) GetAttachments(ctx context.Context, pageID string) ([]Attachmen
 	}
 
 	return allAttachments, nil
+}
+
+type attachmentResponse struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	MediaType    string `json:"mediaType"`
+	DownloadLink string `json:"downloadLink"`
+}
+
+// GetAttachmentByID fetches a single attachment by its ID via the
+// /wiki/api/v2/attachments/{id} endpoint. A 404 maps to ErrAttachmentNotFound.
+func (c *client) GetAttachmentByID(ctx context.Context, attachmentID string) (*Attachment, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/wiki/api/v2/attachments/%s", attachmentID), nil)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrAttachmentNotFound
+		}
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result attachmentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return &Attachment{
+		ID:          result.ID,
+		Title:       result.Title,
+		MediaType:   result.MediaType,
+		DownloadURL: result.DownloadLink,
+	}, nil
 }
 
 func (c *client) GetContentParent(ctx context.Context, id string, contentType string) (*Page, error) {

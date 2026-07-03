@@ -31,14 +31,20 @@ func TestClient_GetSpace(t *testing.T) {
 				"results": [{
 					"id": "12345",
 					"key": "ENG",
-					"name": "Engineering"
+					"name": "Engineering",
+					"type": "global",
+					"status": "current",
+					"homepageId": "999"
 				}]
 			}`,
 			statusCode: http.StatusOK,
 			wantSpace: &Space{
-				ID:   "12345",
-				Key:  "ENG",
-				Name: "Engineering",
+				ID:         "12345",
+				Key:        "ENG",
+				Name:       "Engineering",
+				Type:       "global",
+				Status:     "current",
+				HomepageID: "999",
 			},
 		},
 		{
@@ -91,7 +97,8 @@ func TestClient_GetSpace(t *testing.T) {
 				t.Errorf("GetSpace() unexpected error: %v", err)
 				return
 			}
-			if space.ID != tt.wantSpace.ID || space.Key != tt.wantSpace.Key || space.Name != tt.wantSpace.Name {
+			if space.ID != tt.wantSpace.ID || space.Key != tt.wantSpace.Key || space.Name != tt.wantSpace.Name ||
+				space.Type != tt.wantSpace.Type || space.Status != tt.wantSpace.Status || space.HomepageID != tt.wantSpace.HomepageID {
 				t.Errorf("GetSpace() = %+v, want %+v", space, tt.wantSpace)
 			}
 		})
@@ -954,6 +961,106 @@ func TestClient_GetSpace_NotFound(t *testing.T) {
 
 	if !errors.Is(err, ErrSpaceNotFound) {
 		t.Fatalf("expected ErrSpaceNotFound, got %v", err)
+	}
+}
+
+func TestClient_GetSpaceByID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/spaces/12345" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"id": "12345",
+			"key": "ENG",
+			"name": "Engineering",
+			"type": "global",
+			"status": "current",
+			"homepageId": "999"
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	space, err := c.GetSpaceByID(context.Background(), "12345")
+	if err != nil {
+		t.Fatalf("GetSpaceByID() error: %v", err)
+	}
+	if space.ID != "12345" {
+		t.Errorf("ID = %q, want 12345", space.ID)
+	}
+	if space.Key != "ENG" {
+		t.Errorf("Key = %q, want ENG", space.Key)
+	}
+	if space.Name != "Engineering" {
+		t.Errorf("Name = %q, want Engineering", space.Name)
+	}
+	if space.Type != "global" {
+		t.Errorf("Type = %q, want global", space.Type)
+	}
+	if space.Status != "current" {
+		t.Errorf("Status = %q, want current", space.Status)
+	}
+	if space.HomepageID != "999" {
+		t.Errorf("HomepageID = %q, want 999", space.HomepageID)
+	}
+}
+
+func TestClient_GetSpaceByID_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetSpaceByID(context.Background(), "12345")
+	if !errors.Is(err, ErrSpaceNotFound) {
+		t.Fatalf("expected ErrSpaceNotFound, got %v", err)
+	}
+}
+
+func TestClient_GetAttachmentByID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/attachments/att1" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"id": "att1",
+			"title": "diagram.png",
+			"mediaType": "image/png",
+			"downloadLink": "/wiki/download/attachments/123/diagram.png"
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	att, err := c.GetAttachmentByID(context.Background(), "att1")
+	if err != nil {
+		t.Fatalf("GetAttachmentByID() error: %v", err)
+	}
+	if att.ID != "att1" {
+		t.Errorf("ID = %q, want att1", att.ID)
+	}
+	if att.Title != "diagram.png" {
+		t.Errorf("Title = %q, want diagram.png", att.Title)
+	}
+	if att.MediaType != "image/png" {
+		t.Errorf("MediaType = %q, want image/png", att.MediaType)
+	}
+	if att.DownloadURL != "/wiki/download/attachments/123/diagram.png" {
+		t.Errorf("DownloadURL = %q, want /wiki/download/attachments/123/diagram.png", att.DownloadURL)
+	}
+}
+
+func TestClient_GetAttachmentByID_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetAttachmentByID(context.Background(), "att1")
+	if !errors.Is(err, ErrAttachmentNotFound) {
+		t.Fatalf("expected ErrAttachmentNotFound, got %v", err)
 	}
 }
 

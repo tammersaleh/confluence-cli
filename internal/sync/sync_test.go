@@ -32,6 +32,13 @@ func (m *mockClient) GetSpace(ctx context.Context, spaceKey string) (*confluence
 	return m.space, nil
 }
 
+func (m *mockClient) GetSpaceByID(ctx context.Context, spaceID string) (*confluence.Space, error) {
+	if m.space == nil {
+		return nil, confluence.ErrSpaceNotFound
+	}
+	return m.space, nil
+}
+
 func (m *mockClient) GetPages(ctx context.Context, spaceID string) ([]confluence.Page, error) {
 	return m.pages, nil
 }
@@ -45,6 +52,10 @@ func (m *mockClient) GetPageContent(ctx context.Context, pageID string) (*conflu
 
 func (m *mockClient) GetAttachments(ctx context.Context, pageID string) ([]confluence.Attachment, error) {
 	return m.attachments[pageID], nil
+}
+
+func (m *mockClient) GetAttachmentByID(ctx context.Context, attachmentID string) (*confluence.Attachment, error) {
+	return nil, confluence.ErrAttachmentNotFound
 }
 
 func (m *mockClient) DownloadAttachment(ctx context.Context, att confluence.Attachment) (io.ReadCloser, error) {
