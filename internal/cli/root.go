@@ -34,6 +34,7 @@ type CLI struct {
 
 	Version VersionCmd `cmd:"" help:"Show version."`
 	Space   SpaceCmd   `cmd:"" help:"Confluence spaces."`
+	Auth    AuthCmd    `cmd:"" help:"Manage authentication."`
 }
 
 // Context returns a fresh context honoring --timeout and --trace, and cancels
