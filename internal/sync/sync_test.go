@@ -21,6 +21,10 @@ type mockClient struct {
 	downloads   map[string][]byte
 }
 
+func (m *mockClient) GetCurrentUser(ctx context.Context) (*confluence.CurrentUser, error) {
+	return nil, nil
+}
+
 func (m *mockClient) GetSpace(ctx context.Context, spaceKey string) (*confluence.Space, error) {
 	if m.space == nil {
 		return nil, confluence.ErrSpaceNotFound

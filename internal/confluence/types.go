@@ -31,6 +31,12 @@ func (e *StatusError) Error() string {
 
 func (e *StatusError) Unwrap() error { return e.Err }
 
+type CurrentUser struct {
+	AccountID   string
+	DisplayName string
+	Email       string // may be empty if the site hides email
+}
+
 type Space struct {
 	ID   string
 	Key  string
@@ -90,6 +96,7 @@ type PageDetail struct {
 }
 
 type Client interface {
+	GetCurrentUser(ctx context.Context) (*CurrentUser, error)
 	GetSpace(ctx context.Context, spaceKey string) (*Space, error)
 	GetPages(ctx context.Context, spaceID string) ([]Page, error)
 	ListPages(ctx context.Context, spaceID, cursor string, limit int) (pages []Page, nextCursor string, err error)

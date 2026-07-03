@@ -98,6 +98,76 @@ func TestClient_GetSpace(t *testing.T) {
 	}
 }
 
+func TestClient_GetCurrentUser(t *testing.T) {
+	tests := []struct {
+		name            string
+		response        string
+		statusCode      int
+		wantAccountID   string
+		wantDisplayName string
+		wantEmail       string
+		wantErr         error
+	}{
+		{
+			name:            "success",
+			response:        `{"accountId":"5b10","displayName":"Ada","email":"ada@example.com"}`,
+			statusCode:      http.StatusOK,
+			wantAccountID:   "5b10",
+			wantDisplayName: "Ada",
+			wantEmail:       "ada@example.com",
+		},
+		{
+			name:            "publicName fallback",
+			response:        `{"accountId":"5b10","displayName":"","publicName":"Ada L"}`,
+			statusCode:      http.StatusOK,
+			wantAccountID:   "5b10",
+			wantDisplayName: "Ada L",
+		},
+		{
+			name:       "unauthorized",
+			response:   `{"message": "Unauthorized"}`,
+			statusCode: http.StatusUnauthorized,
+			wantErr:    ErrUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/wiki/rest/api/user/current" {
+					t.Errorf("unexpected path: %s", r.URL.Path)
+				}
+				w.WriteHeader(tt.statusCode)
+				w.Write([]byte(tt.response))
+			}))
+			defer server.Close()
+
+			c := NewClient(server.URL, "test@example.com", "api-token")
+			user, err := c.GetCurrentUser(context.Background())
+
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("GetCurrentUser() error = %v, wantErr %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("GetCurrentUser() unexpected error: %v", err)
+				return
+			}
+			if user.AccountID != tt.wantAccountID {
+				t.Errorf("AccountID = %q, want %q", user.AccountID, tt.wantAccountID)
+			}
+			if user.DisplayName != tt.wantDisplayName {
+				t.Errorf("DisplayName = %q, want %q", user.DisplayName, tt.wantDisplayName)
+			}
+			if user.Email != tt.wantEmail {
+				t.Errorf("Email = %q, want %q", user.Email, tt.wantEmail)
+			}
+		})
+	}
+}
+
 func TestClient_GetPages(t *testing.T) {
 	tests := []struct {
 		name      string

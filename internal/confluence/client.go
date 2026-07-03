@@ -171,6 +171,37 @@ func (c *client) doRequest(ctx context.Context, method, path string, query url.V
 	return nil, fmt.Errorf("after %d retries: %w", maxRetries, lastErr)
 }
 
+type currentUserResponse struct {
+	AccountID   string `json:"accountId"`
+	DisplayName string `json:"displayName"`
+	PublicName  string `json:"publicName"`
+	Email       string `json:"email"`
+}
+
+func (c *client) GetCurrentUser(ctx context.Context) (*CurrentUser, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/wiki/rest/api/user/current", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result currentUserResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	displayName := result.DisplayName
+	if displayName == "" {
+		displayName = result.PublicName
+	}
+
+	return &CurrentUser{
+		AccountID:   result.AccountID,
+		DisplayName: displayName,
+		Email:       result.Email,
+	}, nil
+}
+
 type spacesResponse struct {
 	Results []struct {
 		ID   string `json:"id"`
