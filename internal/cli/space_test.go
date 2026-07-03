@@ -68,6 +68,51 @@ func TestSpaceSync_MissingCredentials(t *testing.T) {
 	}
 }
 
+func TestSpaceSync_SiteFlagMismatch(t *testing.T) {
+	clearCredEnv(t)
+	var out, errBuf bytes.Buffer
+	c := &CLI{Site: "https://other.atlassian.net"}
+	c.SetOutput(&out, &errBuf)
+
+	cmd := &SpaceSyncCmd{
+		URL: "https://acme.atlassian.net/wiki/spaces/ENG",
+		Dir: t.TempDir(),
+	}
+	err := cmd.Run(c)
+
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Err != "invalid_input" || oErr.Code != output.ExitGeneral {
+		t.Errorf("got Err=%q Code=%d, want invalid_input/%d", oErr.Err, oErr.Code, output.ExitGeneral)
+	}
+}
+
+func TestSpaceSync_SiteFlagMatchesURL(t *testing.T) {
+	clearCredEnv(t)
+	var out, errBuf bytes.Buffer
+	// --site agrees with the URL's site, so validation passes and the command
+	// proceeds to credential resolution, which fails (no creds) with ExitAuth.
+	c := &CLI{Site: "https://acme.atlassian.net/wiki"}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &SpaceSyncCmd{
+		URL: "https://acme.atlassian.net/wiki/spaces/ENG",
+		Dir: t.TempDir(),
+	}
+	err := cmd.Run(c)
+
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Code != output.ExitAuth {
+		t.Errorf("matching --site should pass validation and fail on missing creds; got Err=%q Code=%d", oErr.Err, oErr.Code)
+	}
+}
+
 func TestSpaceSync_EmptySpaceHappyPath(t *testing.T) {
 	clearCredEnv(t)
 
