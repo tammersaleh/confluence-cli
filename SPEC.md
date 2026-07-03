@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). Only Markdown body input for writes and inline comments remain unimplemented (see "Planned").
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module stay `confluence-sync` (mirroring `slack`→`slack-cli`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
 
 ## Design principles
 
@@ -72,7 +72,7 @@ Fields named `*_ts`, `created_at`, or `modified_at` gain an `*_iso` sibling in R
 - `--fields` - comma-separated list limiting output to those top-level fields. Applies to data rows only, not `_meta`. Nested objects are returned whole when their parent field is selected; use `jq` for deeper access.
 - `--quiet` - suppress all stdout (data rows and the `_meta` trailer). The exit code conveys success/failure and fatal errors still print to stderr.
 - `--timeout` - per-command deadline for API work.
-- `--trace` - attach a JSON-lines diagnostics tracer to stderr. The plumbing is in place; per-request event emission (fetches, retries, latencies) arrives in a later release with the broadened client.
+- `--trace` - emit JSON-lines diagnostics to stderr: one event per API request (endpoint, attempt, status, latency) plus retry waits.
 
 ## Auth model
 
@@ -99,8 +99,9 @@ Write commands that carry page or comment content (`page create`, `page update`,
 
 - `storage` - Confluence storage format, a well-formed XHTML fragment (e.g. `<p>Hello</p>`).
 - `adf` (alias `atlas_doc_format`) - Atlassian Document Format, a JSON document whose root is `{"type":"doc","version":1,"content":[...]}`.
+- `markdown` (alias `md`) - GFM Markdown, converted locally to storage XHTML via goldmark before the API sees it. Fenced code blocks become a plain preformatted block, not a Confluence code macro. Raw HTML embedded in the Markdown is escaped, not passed through.
 
-The body is validated locally before the API sees it; a malformed fragment or ADF doc fails with `invalid_body` and nothing is written. Markdown body input is not yet supported.
+The body is validated locally before the API sees it; a malformed fragment or ADF doc fails with `invalid_body` and nothing is written.
 
 ### version
 
@@ -321,7 +322,7 @@ $ confluence page tree --space ENG
 ### page create
 
 ```text
-confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf] [< body]
+confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf|markdown] [< body]
 ```
 
 Create a page. `--space` takes a bare space key or a space/page URL; a URL selects the site. `--parent` nests the new page under an existing page (same site as the space). The body is read from stdin; `--body-format` is required only when a non-empty body is piped. With no stdin (or an empty/whitespace body), the page is created empty and `--body-format` may be omitted.
@@ -337,7 +338,7 @@ $ printf '<p>Hello</p>' | confluence page create --space ENG --title "API Design
 ### page update
 
 ```text
-confluence page update <id|url> --if-version <n> [--title <t>] [--body-format storage|adf] [< body]
+confluence page update <id|url> --if-version <n> [--title <t>] [--body-format storage|adf|markdown] [< body]
 ```
 
 Update a page under optimistic concurrency. `--if-version` is the version you expect to be current; if the live version differs, the command fails with a recoverable `version_conflict` and writes nothing. On success the page is written at version `n+1`.
@@ -463,16 +464,23 @@ $ confluence comment list 123456
 ### comment add
 
 ```text
-confluence comment add <page id|url> --body-format storage|adf [< body]
+confluence comment add <page id|url> --body-format storage|adf|markdown [< body]
+confluence comment add <page id|url> --inline --selection-text <text> [--match-index N] [--match-count N] --body-format storage|adf|markdown [< body]
 ```
 
-Add a footer comment to a page. The body is read from stdin (required) and `--body-format` names its representation. Only footer comments are supported; `--inline` is reserved but not yet implemented and returns `not_implemented`.
-
-The row carries `id`, `page_id`, `kind:"footer"`, `body_format` (the API representation: `storage` or `atlas_doc_format`), and `web_url`.
+Add a comment to a page. The body is read from stdin (required) and `--body-format` names its representation (`storage`, `adf`, or `markdown`). Without `--inline` the comment is a footer comment; the row carries `id`, `page_id`, `kind:"footer"`, `body_format` (the API representation: `storage` or `atlas_doc_format`), and `web_url`.
 
 ```jsonl
 $ printf '<p>Looks good to me.</p>' | confluence comment add 123456 --body-format storage
 {"id":"c1","page_id":"123456","kind":"footer","body_format":"storage","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c1"}
+{"_meta":{"has_more":false}}
+```
+
+`--inline` anchors the comment to on-page text. `--selection-text` is the exact page text to attach to. When that text occurs more than once, `--match-index N` (1-based) selects which occurrence; `--match-count N` asserts the expected number of occurrences and fails if the live count differs. Inline rows carry `kind:"inline"` and `selection_text`.
+
+```jsonl
+$ printf '<p>Clarify this.</p>' | confluence comment add 123456 --inline --selection-text "the retry budget" --body-format storage
+{"id":"c2","page_id":"123456","kind":"inline","selection_text":"the retry budget","body_format":"storage","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c2"}
 {"_meta":{"has_more":false}}
 ```
 
@@ -549,9 +557,6 @@ $ confluence user info a1 nope
 {"_meta":{"has_more":false,"error_count":1}}
 ```
 
-## Planned (not yet implemented)
+## Implementation status
 
-The write surface ships today; two refinements remain designed but not built.
-
-- Markdown body input for writes. Today `page create`, `page update`, and `comment add` accept `storage` or `adf` on stdin. Markdown-in (converted to storage/ADF) is the intended agent-friendly default and is not yet available.
-- Inline comments. `comment add` writes footer comments only; `--inline` is reserved and currently returns `not_implemented`.
+The full surface described above is implemented, including Markdown body input for writes (`--body-format markdown`) and inline comments (`comment add --inline`).

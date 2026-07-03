@@ -9,9 +9,8 @@ The read and write surface ships today: `version`, `space sync`, `space info`,
 `page tree`, `page create`, `page update`, `page delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
-`user info`. Only Markdown body input for writes and inline comments remain
-unimplemented. See `SPEC.md` for the full contract and
-`skills/confluence-cli/SKILL.md` for the agent skill.
+`user info`. The full command surface is implemented. See `SPEC.md` for the full
+contract and `skills/confluence-cli/SKILL.md` for the agent skill.
 
 ## Installation
 
@@ -58,10 +57,11 @@ a `_meta` trailer line.
 
 Write commands that carry content (`page create`, `page update`, `comment add`)
 take the body on stdin, never as a flag. `--body-format` names what you pipe:
-`storage` (a well-formed XHTML fragment) or `adf`/`atlas_doc_format` (an ADF JSON
-doc rooted at `{"type":"doc","version":1,"content":[...]}`). The body is
-validated locally before the API sees it. Markdown body input is not yet
-supported.
+`storage` (a well-formed XHTML fragment), `adf`/`atlas_doc_format` (an ADF JSON
+doc rooted at `{"type":"doc","version":1,"content":[...]}`), or `markdown`/`md`
+(GFM, converted to storage XHTML via goldmark). The body is validated locally
+before the API sees it. Markdown fenced code becomes a plain preformatted block,
+not a Confluence code macro, and raw HTML embedded in the Markdown is escaped.
 
 ### version
 
@@ -113,7 +113,7 @@ Flags:
 - `--prune` - after syncing, remove files in the output directory no longer part of the space. `_attachments/` dirs of version-skipped pages are protected.
 - `--dry-run` - report what would happen without writing.
 - `--quiet` - suppress all stdout (summary and trailer). Rely on the exit code; fatal errors still print to stderr.
-- `--trace` - attach a JSON-lines diagnostics tracer to stderr. Per-request event emission lands in a later release.
+- `--trace` - emit JSON-lines diagnostics to stderr: one event per API request (endpoint, attempt, status, latency) plus retry waits.
 
 Accepts space URLs in these formats:
 
@@ -381,9 +381,9 @@ confluence comment list 123456 --inline
 
 ### comment add
 
-Add a footer comment to a page. The body is read from stdin (required) and
-`--body-format` names its representation. Only footer comments are supported;
-`--inline` is reserved and returns `not_implemented`. The row carries `id`,
+Add a comment to a page. The body is read from stdin (required) and
+`--body-format` names its representation (`storage`, `adf`, or `markdown`).
+Without `--inline` the comment is a footer comment; the row carries `id`,
 `page_id`, `kind:"footer"`, `body_format` (the API representation, `storage` or
 `atlas_doc_format`), and `web_url`.
 
@@ -393,6 +393,20 @@ printf '<p>Looks good to me.</p>' | confluence comment add 123456 --body-format 
 
 ```jsonl
 {"id":"c1","page_id":"123456","kind":"footer","body_format":"storage","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c1"}
+{"_meta":{"has_more":false}}
+```
+
+`--inline` anchors the comment to on-page text via `--selection-text <text>`.
+When that text occurs more than once, `--match-index N` (1-based) selects which
+occurrence and `--match-count N` asserts the expected number of occurrences.
+Inline rows carry `kind:"inline"` and `selection_text`.
+
+```bash
+printf '<p>Clarify this.</p>' | confluence comment add 123456 --inline --selection-text "the retry budget" --body-format storage
+```
+
+```jsonl
+{"id":"c2","page_id":"123456","kind":"inline","selection_text":"the retry budget","body_format":"storage","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c2"}
 {"_meta":{"has_more":false}}
 ```
 

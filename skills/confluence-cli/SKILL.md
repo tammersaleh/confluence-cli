@@ -1,6 +1,6 @@
 ---
 name: confluence-cli
-description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), inspect spaces (space info/list), attachments, CQL search, comments, labels, users, and write content (page create/update/delete, attachment upload, comment add, label add/remove) with storage or ADF bodies on stdin"
+description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), inspect spaces (space info/list), attachments, CQL search, comments, labels, users, and write content (page create/update/delete, attachment upload, comment add including inline, label add/remove) with storage, ADF, or Markdown bodies on stdin"
 argument-hint: ""
 allowed-tools:
   - Bash(confluence *)
@@ -16,8 +16,8 @@ Both reads and writes ship today: `version`, `space sync`, `space info`,
 `page tree`, `page create`, `page update`, `page delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
-`user info`. Read commands are below; writes are under "Writing content". Only
-Markdown body input for writes and inline comments are not yet available.
+`user info`. Read commands are below; writes are under "Writing content". The
+full command surface is available.
 
 ## Prerequisites
 
@@ -348,8 +348,14 @@ body fails with `invalid_body` and nothing is written.
   whose root is `{"type":"doc","version":1,"content":[...]}`. Use it when you
   already have ADF (e.g. from `page get --body-format adf`) or need node types
   storage can't express cleanly.
+- `markdown` (alias `md`) - GFM Markdown, converted locally to storage XHTML via
+  goldmark before the API sees it. Convenient when you're authoring from scratch.
+  Fenced code becomes a plain preformatted block, not a Confluence code macro,
+  and raw HTML in the Markdown is escaped rather than passed through.
 
-Markdown body input is not yet supported. Pipe storage or ADF.
+Markdown is supported via `--body-format markdown` (with the code-macro caveat
+above). Inline comments are supported via `comment add --inline
+--selection-text`.
 
 ### Creating a page
 
@@ -363,6 +369,12 @@ ADF body (same page, ADF equivalent):
 
 ```bash
 printf '{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]}]}' | confluence page create --space ENG --title "X" --body-format adf
+```
+
+Markdown body (converted to storage via goldmark):
+
+```bash
+printf '# Hello\n\nSome **bold** text.' | confluence page create --space ENG --title "X" --body-format markdown
 ```
 
 `--body-format` is required only when a non-empty body is piped. With no stdin
@@ -459,13 +471,27 @@ confluence attachment upload 123456 ./diagram.png ./notes.pdf
 
 ### Adding comments and labels
 
-`comment add` writes a footer comment; the body is read from stdin and
-`--body-format` is required. `--inline` is reserved and returns
-`not_implemented`. The row's `body_format` is the API representation (`storage`
-or `atlas_doc_format`).
+`comment add` writes a comment; the body is read from stdin and `--body-format`
+is required (`storage`, `adf`, or `markdown`). Without `--inline` it is a footer
+comment. The row's `body_format` is the API representation (`storage` or
+`atlas_doc_format`).
 
 ```bash
 printf '<p>Looks good to me.</p>' | confluence comment add 123456 --body-format storage
+```
+
+`--inline` anchors the comment to on-page text with `--selection-text <text>`.
+When the text occurs more than once, `--match-index N` (1-based) picks the
+occurrence and `--match-count N` asserts the expected number of occurrences.
+Inline rows carry `kind:"inline"` and `selection_text`.
+
+```bash
+printf '<p>Clarify this.</p>' | confluence comment add 123456 --inline --selection-text "the retry budget" --body-format storage
+```
+
+```jsonl
+{"id":"c2","page_id":"123456","kind":"inline","selection_text":"the retry budget","body_format":"storage","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c2"}
+{"_meta":{"has_more":false}}
 ```
 
 `label add`/`label remove` take one or more labels; each is applied
@@ -480,11 +506,3 @@ confluence label remove 123456 on-call
 {"page_id":"123456","name":"runbook","prefix":"global","added":true}
 {"_meta":{"has_more":false,"error_count":0}}
 ```
-
-## Not yet available
-
-- Markdown body input for writes. `page create`, `page update`, and
-  `comment add` accept `storage` or `adf` on stdin; Markdown-in is not yet
-  wired up.
-- Inline comments. `comment add` writes footer comments only; `--inline`
-  returns `not_implemented`.

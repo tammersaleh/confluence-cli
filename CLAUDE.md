@@ -11,9 +11,9 @@ contract. The read and write surface ships today: `version`, `space sync`,
 `page ancestors`, `page tree`, `page create`, `page update`, `page delete`,
 `attachment list`, `attachment download`, `attachment upload`, `search`,
 `comment list`, `comment add`, `label list`, `label add`, `label remove`,
-`user current`, and `user info`. Only Markdown body input for writes and inline
-comments remain unimplemented. See `README.md` for user-facing usage and
-`skills/confluence-cli/SKILL.md` for the agent-facing skill.
+`user current`, and `user info`. The full command surface is implemented. See
+`README.md` for user-facing usage and `skills/confluence-cli/SKILL.md` for the
+agent-facing skill.
 
 ## Architecture
 
@@ -28,7 +28,7 @@ internal/
     page.go                    `page list/get/children/ancestors/tree` (reads) + `page create/update/delete` (writes). Derives site/space from --space or URL args; --body-format incl. derived markdown on read. `page tree` builds the hierarchy in-command, sorted by ID (not display order). `page update` preflights GetPage to enforce --if-version (version_conflict) and preserve title/body when not supplied.
     attachment.go              `attachment list`, `attachment download`, `attachment upload` commands.
     search.go                  `search <cql>` command. CQL positional, site-wide, paginated (--limit/--cursor/--all).
-    comment.go                 `comment list` + `comment add` (footer only; --inline returns not_implemented).
+    comment.go                 `comment list` + `comment add` (footer, or inline via --inline --selection-text with --match-index/--match-count).
     label.go                   `label list`, `label add`, `label remove`. Add/remove are per-label (independent, inline errors).
     user.go                    `user current` and `user info <accountId>...` commands.
   output/
@@ -39,7 +39,7 @@ internal/
     credentials.go             Credentials store keyed by canonical site URL. Env precedence + merge.
   httpx/
     errors.go                  RateLimitError + generic ClassifyError (domain-agnostic).
-    trace.go                   Tracer interface + JSON-lines tracer wired via context. (Paginate[T] arrives with its first caller in Phase 1.)
+    trace.go                   Tracer interface + JSON-lines tracer; the confluence client emits per-request events.
   confluence/
     client.go                  HTTP client for Confluence Cloud API v2. Retry w/ exponential backoff + jitter. Sentinels (ErrUnauthorized, ErrSpaceNotFound, ...) mapped to structured errors in internal/cli.
     types.go                   API response types: Space, Page, PageContent, Attachment.
@@ -47,7 +47,7 @@ internal/
   confluenceurl/
     confluenceurl.go           Parses page/space URLs into a Ref (Kind, BaseURL, SpaceKey, PageID). CommonSite enforces one-site-per-invocation for page get.
   bodywrite/
-    bodywrite.go               Write-command body input: Read (stdin, TTY vs pipe) + Prepare (validate storage XHTML or ADF locally, return representation+value). invalid bodies fail before the API sees them.
+    bodywrite.go               Write-command body input: Read (stdin, TTY vs pipe) + Prepare (validate storage XHTML or ADF locally, or convert markdown to storage via goldmark, return representation+value). invalid bodies fail before the API sees them. Markdown fenced code becomes a plain preformatted block, not a code macro; raw HTML is escaped.
   converter/
     converter.go               Converts Confluence storage format (XHTML) to GFM Markdown.
   sync/
@@ -117,7 +117,7 @@ old Cobra tool's `1 = config / 2 = auth / 3 = api / 4 = filesystem` codes
 
 ## Commands
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`. Write commands that carry content (`page create`, `page update`, `comment add`) take the body on stdin with `--body-format storage|adf` (validated locally via `internal/bodywrite` before the API sees it).
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`. Write commands that carry content (`page create`, `page update`, `comment add`) take the body on stdin with `--body-format storage|adf|markdown` (validated locally via `internal/bodywrite` before the API sees it; `markdown` is converted to storage XHTML via goldmark, where fenced code becomes a plain preformatted block rather than a code macro and raw HTML is escaped).
 
 - `confluence version` - emits the build version, then the trailer.
 - `confluence space sync <space-url> <output-dir>` - one-way space crawl to local Markdown. Flags: `--prune`, `--dry-run`, `--quiet`, `--timeout`, `--trace`. Progress goes to stderr; stdout carries a single summary object then the trailer.
@@ -131,31 +131,30 @@ The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `p
 - `confluence page children <id|url>` - direct children of a page. Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`.
 - `confluence page ancestors <id|url>` - ancestor chain, root-most first. Not paginated. Rows carry `id`, `type` (the endpoint omits `title`).
 - `confluence page tree --space <key|url>` - space page hierarchy in DFS order. Rows carry `id`, `title`, `type`, `depth`, and `parent_id` when present. Siblings sorted by ID (deterministic, not Confluence display order).
-- `confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf]` - create a page; body on stdin (`--body-format` required only for a non-empty body; empty stdin = empty page). Row: `id`, `title`, `space_id`, `parent_id?`, `version`, `author_id`, `created_at`, `web_url`. Body not echoed.
-- `confluence page update <id|url> --if-version <n> [--title <t>] [--body-format storage|adf]` - update under optimistic concurrency; body on stdin. A live-version mismatch fails with `version_conflict` and writes nothing. Title-only preserves body; body-only preserves title. Row: `id`, `title`, `version`, `previous_version`, `web_url`.
+- `confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf|markdown]` - create a page; body on stdin (`--body-format` required only for a non-empty body; empty stdin = empty page). Row: `id`, `title`, `space_id`, `parent_id?`, `version`, `author_id`, `created_at`, `web_url`. Body not echoed.
+- `confluence page update <id|url> --if-version <n> [--title <t>] [--body-format storage|adf|markdown]` - update under optimistic concurrency; body on stdin. A live-version mismatch fails with `version_conflict` and writes nothing. Title-only preserves body; body-only preserves title. Row: `id`, `title`, `version`, `previous_version`, `web_url`.
 - `confluence page delete <id|url>...` - move pages to trash (not purge). `--yes` required for a real delete; without it (and without `--dry-run`) fails with `confirmation_required`. `--dry-run` previews. Rows echo `input`; per-item errors bump `_meta.error_count`.
 - `confluence attachment list <page id|url>` - list a page's attachments. Rows carry `id`, `title`, `media_type`, `download_url` (absolute), `page_id`.
 - `confluence attachment download <id> [-o|--out <path>]` - download an attachment by id (not a URL) to a file; defaults to the attachment filename in the current dir. Emits `id`, `title`, `media_type`, `path`, `bytes`.
 - `confluence attachment upload <page id|url> <file>...` - upload files as attachments (per-file, inline errors). A filename collision creates a new version. Rows echo `input` and carry `page_id`, `attachment_id`, `title`, `media_type`, `uploaded:true`.
 - `confluence search <cql>` - CQL search. The CQL is the positional arg; site-wide (from `--site` or the single stored default). Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `space_key`, `excerpt`, `url`.
 - `confluence comment list <page id|url>` - a page's comments. Drains footer + inline (no cursor); `--footer`/`--inline` narrow to one kind. Rows carry `id`, `kind` (`footer`/`inline`), `body`, `author_id`, `created_at`, `web_url`. A missing page is a fatal `page_not_found`.
-- `confluence comment add <page id|url> --body-format storage|adf` - add a footer comment; body on stdin (required). `--inline` returns `not_implemented`. Row: `id`, `page_id`, `kind:"footer"`, `body_format`, `web_url`.
+- `confluence comment add <page id|url> --body-format storage|adf|markdown` - add a comment; body on stdin (required). Footer by default; `--inline --selection-text <text> [--match-index N] [--match-count N]` anchors an inline comment to on-page text. Row: `id`, `page_id`, `kind` (`footer`/`inline`), `body_format`, `web_url`; inline rows also carry `selection_text`.
 - `confluence label list <page id|url>` - a page's labels, fully drained. Rows carry `id`, `name`, `prefix`.
 - `confluence label add <page id|url> <label>...` - add labels (per-label, inline errors). Rows carry `page_id`, `name`, `prefix`, `added:true`.
 - `confluence label remove <page id|url> <label>...` - remove labels (per-label, inline errors). Rows carry `page_id`, `name`, `removed:true`.
 - `confluence user current` - the authenticated user. A single row with `account_id`, `display_name`, `email`.
 - `confluence user info <accountId>...` - look up users by account id. Rows echo `input` and carry `account_id`, `display_name`, `email`. Unknown ids go inline as `user_not_found` and bump `_meta.error_count`.
 
-Only Markdown body input for writes and inline comments remain unimplemented. See
-`SPEC.md`.
+The full command surface is implemented. See `SPEC.md`.
 
 ### Global flags
 
 `--site`, `--fields`, `--quiet`, `--timeout`, `--trace`. `Context()` on the CLI
 threads `--timeout` and `--trace` into a context every command's `Run` uses;
-`--trace` attaches a JSON-lines tracer to the context. The domain client does
-not emit request events yet; that wiring lands in Phase 1 (see the plan's
-review follow-ups).
+`--trace` attaches a JSON-lines tracer to the context; the confluence client
+emits a `request` event per attempt (endpoint, status, latency) and a
+`retry_wait` event on backoff.
 
 ## Auth model
 
