@@ -319,6 +319,107 @@ func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
 	return allPages, nil
 }
 
+type listPagesResponse struct {
+	Results []struct {
+		ID         string `json:"id"`
+		Title      string `json:"title"`
+		ParentID   string `json:"parentId"`
+		ParentType string `json:"parentType"`
+	} `json:"results"`
+	Links struct {
+		Next string `json:"next"`
+	} `json:"_links"`
+}
+
+// cursorFromNext extracts the "cursor" query-param value from a next-page URL
+// (either a full URL or a path with query). Returns "" if absent or unparsable.
+func cursorFromNext(next string) string {
+	if next == "" {
+		return ""
+	}
+	u, err := url.Parse(next)
+	if err != nil {
+		return ""
+	}
+	return u.Query().Get("cursor")
+}
+
+// ListPages returns exactly one API page of results for the space. Unlike
+// GetPages (the sync crawl), it does NOT resolve parents via N+1 lookups or add
+// synthetic parent nodes: parentId/parentType are decoded best-effort from the
+// list response when present.
+func (c *client) ListPages(ctx context.Context, spaceID, cursor string, limit int) (pages []Page, nextCursor string, err error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	query := url.Values{}
+	query.Set("limit", fmt.Sprintf("%d", limit))
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+
+	path := fmt.Sprintf("/wiki/api/v2/spaces/%s/pages", spaceID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, query)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, "", ErrSpaceNotFound
+		}
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result listPagesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	pages = make([]Page, 0, len(result.Results))
+	for _, p := range result.Results {
+		pages = append(pages, Page{
+			ID:         p.ID,
+			Title:      p.Title,
+			ParentID:   p.ParentID,
+			ParentType: p.ParentType,
+			Type:       "page",
+		})
+	}
+
+	// Prefer the Link response header if present, else the body's _links.next.
+	next := result.Links.Next
+	if hdr := resp.Header.Get("Link"); hdr != "" {
+		if c := cursorFromNext(parseLinkHeaderNext(hdr)); c != "" {
+			return pages, c, nil
+		}
+	}
+	return pages, cursorFromNext(next), nil
+}
+
+// parseLinkHeaderNext returns the URL of the rel="next" entry in an RFC 5988
+// Link header, or "" if none.
+func parseLinkHeaderNext(header string) string {
+	for _, part := range strings.Split(header, ",") {
+		segs := strings.Split(part, ";")
+		if len(segs) < 2 {
+			continue
+		}
+		isNext := false
+		for _, s := range segs[1:] {
+			if strings.Contains(s, `rel="next"`) || strings.Contains(s, "rel=next") {
+				isNext = true
+				break
+			}
+		}
+		if !isNext {
+			continue
+		}
+		u := strings.TrimSpace(segs[0])
+		u = strings.TrimPrefix(u, "<")
+		u = strings.TrimSuffix(u, ">")
+		return u
+	}
+	return ""
+}
+
 func (c *client) getPageParent(ctx context.Context, pageID string) (parentID, parentType string, err error) {
 	resp, err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/wiki/api/v2/pages/%s", pageID), nil)
 	if err != nil {
@@ -392,6 +493,88 @@ func (c *client) GetPageContent(ctx context.Context, pageID string) (*PageConten
 		CreatedAt:  result.CreatedAt,
 		ModifiedAt: result.Version.CreatedAt,
 		WebURL:     webURL,
+	}, nil
+}
+
+type pageDetailResponse struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	SpaceID   string `json:"spaceId"`
+	AuthorID  string `json:"authorId"`
+	CreatedAt string `json:"createdAt"`
+	Body      struct {
+		Storage struct {
+			Value string `json:"value"`
+		} `json:"storage"`
+		AtlasDocFormat struct {
+			Value string `json:"value"`
+		} `json:"atlas_doc_format"`
+		View struct {
+			Value string `json:"value"`
+		} `json:"view"`
+	} `json:"body"`
+	Version struct {
+		Number    int    `json:"number"`
+		CreatedAt string `json:"createdAt"`
+	} `json:"version"`
+	Links struct {
+		WebUI string `json:"webui"`
+	} `json:"_links"`
+}
+
+func (c *client) GetPage(ctx context.Context, pageID string, format APIBodyFormat) (*PageDetail, error) {
+	switch format {
+	case BodyFormatStorage, BodyFormatAtlasDoc, BodyFormatView:
+	default:
+		return nil, fmt.Errorf("unsupported body format %q", format)
+	}
+
+	query := url.Values{}
+	query.Set("body-format", string(format))
+
+	resp, err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/wiki/api/v2/pages/%s", pageID), query)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrPageNotFound
+		}
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result pageDetailResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	var body string
+	switch format {
+	case BodyFormatStorage:
+		body = result.Body.Storage.Value
+	case BodyFormatAtlasDoc:
+		body = result.Body.AtlasDocFormat.Value
+	case BodyFormatView:
+		body = result.Body.View.Value
+	}
+
+	webURL := result.Links.WebUI
+	if webURL != "" && !strings.HasPrefix(webURL, "http") {
+		if !strings.HasPrefix(webURL, "/wiki") {
+			webURL = "/wiki" + webURL
+		}
+		webURL = c.baseURL + webURL
+	}
+
+	return &PageDetail{
+		ID:         result.ID,
+		Title:      result.Title,
+		SpaceID:    result.SpaceID,
+		Version:    result.Version.Number,
+		AuthorID:   result.AuthorID,
+		CreatedAt:  result.CreatedAt,
+		ModifiedAt: result.Version.CreatedAt,
+		WebURL:     webURL,
+		Body:       body,
+		BodyFormat: format,
 	}, nil
 }
 

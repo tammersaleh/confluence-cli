@@ -64,10 +64,37 @@ type Attachment struct {
 	DownloadURL string
 }
 
+type APIBodyFormat string
+
+const (
+	BodyFormatStorage  APIBodyFormat = "storage"
+	BodyFormatAtlasDoc APIBodyFormat = "atlas_doc_format"
+	BodyFormatView     APIBodyFormat = "view"
+)
+
+// PageDetail is a single page fetched for `page get`. Body is the raw value the
+// API returned for the requested BodyFormat: XHTML for storage, HTML for view,
+// and a JSON-encoded ADF string for atlas_doc_format (the CLI decides how to
+// present it). Distinct from PageContent, which is storage-only and sync-shaped.
+type PageDetail struct {
+	ID         string
+	Title      string
+	SpaceID    string
+	Version    int
+	AuthorID   string
+	CreatedAt  string // ISO 8601
+	ModifiedAt string // ISO 8601 (version.createdAt)
+	WebURL     string
+	Body       string
+	BodyFormat APIBodyFormat
+}
+
 type Client interface {
 	GetSpace(ctx context.Context, spaceKey string) (*Space, error)
 	GetPages(ctx context.Context, spaceID string) ([]Page, error)
+	ListPages(ctx context.Context, spaceID, cursor string, limit int) (pages []Page, nextCursor string, err error)
 	GetPageContent(ctx context.Context, pageID string) (*PageContent, error)
+	GetPage(ctx context.Context, pageID string, format APIBodyFormat) (*PageDetail, error)
 	GetAttachments(ctx context.Context, pageID string) ([]Attachment, error)
 	DownloadAttachment(ctx context.Context, attachment Attachment) (io.ReadCloser, error)
 	GetContentParent(ctx context.Context, id string, contentType string) (*Page, error)

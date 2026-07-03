@@ -55,6 +55,14 @@ func (m *mockClient) GetContentParent(ctx context.Context, id string, contentTyp
 	return nil, nil
 }
 
+func (m *mockClient) ListPages(ctx context.Context, spaceID, cursor string, limit int) ([]confluence.Page, string, error) {
+	return m.pages, "", nil
+}
+
+func (m *mockClient) GetPage(ctx context.Context, pageID string, format confluence.APIBodyFormat) (*confluence.PageDetail, error) {
+	return nil, nil
+}
+
 func TestSync_SingleLeafPage(t *testing.T) {
 	client := &mockClient{
 		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},

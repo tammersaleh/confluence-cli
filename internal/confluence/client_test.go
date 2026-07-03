@@ -200,6 +200,228 @@ func TestClient_GetPages_Paginated(t *testing.T) {
 	}
 }
 
+func TestClient_ListPages(t *testing.T) {
+	var reqCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqCount++
+		if r.URL.Path != "/wiki/api/v2/spaces/12345/pages" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"results": [
+				{"id": "1", "title": "Page One"},
+				{"id": "2", "title": "Page Two", "parentId": "1", "parentType": "page"}
+			],
+			"_links": {"next": "/wiki/api/v2/spaces/12345/pages?limit=25&cursor=NEXT"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	pages, nextCursor, err := c.ListPages(context.Background(), "12345", "", 25)
+	if err != nil {
+		t.Fatalf("ListPages() error: %v", err)
+	}
+	if reqCount != 1 {
+		t.Errorf("expected exactly 1 HTTP request (no N+1), got %d", reqCount)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("got %d pages, want 2", len(pages))
+	}
+	if pages[0].ID != "1" || pages[0].Title != "Page One" {
+		t.Errorf("pages[0] = %+v, want ID=1 Title=Page One", pages[0])
+	}
+	if pages[0].Type != "page" {
+		t.Errorf("pages[0].Type = %q, want page", pages[0].Type)
+	}
+	if pages[1].ParentID != "1" {
+		t.Errorf("pages[1].ParentID = %q, want 1", pages[1].ParentID)
+	}
+	if pages[1].ParentType != "page" {
+		t.Errorf("pages[1].ParentType = %q, want page", pages[1].ParentType)
+	}
+	if nextCursor != "NEXT" {
+		t.Errorf("nextCursor = %q, want NEXT", nextCursor)
+	}
+}
+
+func TestClient_ListPages_LastPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{
+			"results": [{"id": "1", "title": "Only Page"}],
+			"_links": {"next": ""}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	pages, nextCursor, err := c.ListPages(context.Background(), "12345", "", 25)
+	if err != nil {
+		t.Fatalf("ListPages() error: %v", err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("got %d pages, want 1", len(pages))
+	}
+	if nextCursor != "" {
+		t.Errorf("nextCursor = %q, want empty", nextCursor)
+	}
+}
+
+func TestClient_ListPages_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.ListPages(context.Background(), "12345", "", 25)
+	if !errors.Is(err, ErrSpaceNotFound) {
+		t.Fatalf("expected ErrSpaceNotFound, got %v", err)
+	}
+}
+
+func TestClient_ListPages_DefaultLimit(t *testing.T) {
+	var gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		w.Write([]byte(`{"results": []}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.ListPages(context.Background(), "12345", "", 0)
+	if err != nil {
+		t.Fatalf("ListPages() error: %v", err)
+	}
+	if gotLimit != "25" {
+		t.Errorf("limit = %q, want 25", gotLimit)
+	}
+}
+
+func TestClient_GetPage_Storage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/pages/123" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("body-format"); got != "storage" {
+			t.Errorf("body-format = %q, want storage", got)
+		}
+		w.Write([]byte(`{
+			"id": "123",
+			"title": "My Page",
+			"spaceId": "space1",
+			"authorId": "user456",
+			"createdAt": "2024-01-15T10:30:00.000Z",
+			"body": {"storage": {"value": "<p>Hello</p>"}},
+			"version": {"number": 5, "createdAt": "2024-06-20T14:45:00.000Z"},
+			"_links": {"webui": "/spaces/TEST/pages/123/My+Page"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	page, err := c.GetPage(context.Background(), "123", BodyFormatStorage)
+	if err != nil {
+		t.Fatalf("GetPage() error: %v", err)
+	}
+	if page.Body != "<p>Hello</p>" {
+		t.Errorf("Body = %q, want <p>Hello</p>", page.Body)
+	}
+	if page.BodyFormat != BodyFormatStorage {
+		t.Errorf("BodyFormat = %q, want storage", page.BodyFormat)
+	}
+	if page.Version != 5 {
+		t.Errorf("Version = %d, want 5", page.Version)
+	}
+	if page.AuthorID != "user456" {
+		t.Errorf("AuthorID = %q, want user456", page.AuthorID)
+	}
+	if page.SpaceID != "space1" {
+		t.Errorf("SpaceID = %q, want space1", page.SpaceID)
+	}
+	if page.ModifiedAt != "2024-06-20T14:45:00.000Z" {
+		t.Errorf("ModifiedAt = %q, want 2024-06-20T14:45:00.000Z", page.ModifiedAt)
+	}
+	wantURL := server.URL + "/wiki/spaces/TEST/pages/123/My+Page"
+	if page.WebURL != wantURL {
+		t.Errorf("WebURL = %q, want %q", page.WebURL, wantURL)
+	}
+}
+
+func TestClient_GetPage_AtlasDoc(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("body-format"); got != "atlas_doc_format" {
+			t.Errorf("body-format = %q, want atlas_doc_format", got)
+		}
+		w.Write([]byte(`{
+			"id": "123",
+			"title": "My Page",
+			"body": {"atlas_doc_format": {"value": "{\"type\":\"doc\"}"}},
+			"version": {"number": 1, "createdAt": "2024-06-20T14:45:00.000Z"},
+			"_links": {"webui": "/spaces/TEST/pages/123"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	page, err := c.GetPage(context.Background(), "123", BodyFormatAtlasDoc)
+	if err != nil {
+		t.Fatalf("GetPage() error: %v", err)
+	}
+	if page.Body != `{"type":"doc"}` {
+		t.Errorf("Body = %q, want ADF JSON string", page.Body)
+	}
+	if page.BodyFormat != BodyFormatAtlasDoc {
+		t.Errorf("BodyFormat = %q, want atlas_doc_format", page.BodyFormat)
+	}
+}
+
+func TestClient_GetPage_View(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("body-format"); got != "view" {
+			t.Errorf("body-format = %q, want view", got)
+		}
+		w.Write([]byte(`{
+			"id": "123",
+			"title": "My Page",
+			"body": {"view": {"value": "<div>rendered</div>"}},
+			"version": {"number": 1, "createdAt": "2024-06-20T14:45:00.000Z"},
+			"_links": {"webui": "/spaces/TEST/pages/123"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	page, err := c.GetPage(context.Background(), "123", BodyFormatView)
+	if err != nil {
+		t.Fatalf("GetPage() error: %v", err)
+	}
+	if page.Body != "<div>rendered</div>" {
+		t.Errorf("Body = %q, want <div>rendered</div>", page.Body)
+	}
+}
+
+func TestClient_GetPage_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetPage(context.Background(), "123", BodyFormatStorage)
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_GetPage_UnsupportedFormat(t *testing.T) {
+	c := NewClient("http://example.com", "test@example.com", "api-token")
+	_, err := c.GetPage(context.Background(), "123", APIBodyFormat("bogus"))
+	if err == nil {
+		t.Fatal("expected error for unsupported body format, got nil")
+	}
+}
+
 func TestClient_GetPageContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/wiki/api/v2/pages/123" {
