@@ -34,7 +34,19 @@ type CLI struct {
 
 	Version VersionCmd `cmd:"" help:"Show version."`
 	Space   SpaceCmd   `cmd:"" help:"Confluence spaces."`
+	Page    PageCmd    `cmd:"" aliases:"pages" help:"Read pages."`
 	Auth    AuthCmd    `cmd:"" help:"Manage authentication."`
+}
+
+// NewClientForSite resolves credentials for the given site hint (a canonical
+// base URL derived from a URL arg, or "" to fall back to --site / the single
+// stored default) and returns a ready confluence client.
+func (c *CLI) NewClientForSite(siteHint string) (confluence.Client, *auth.ResolvedCredentials, error) {
+	rc, err := c.ResolveCredentials(siteHint) // already returns *output.Error on failure
+	if err != nil {
+		return nil, nil, err
+	}
+	return confluence.NewClient(rc.Site, rc.Email, rc.APIToken), rc, nil
 }
 
 // Context returns a fresh context honoring --timeout and --trace, and cancels
