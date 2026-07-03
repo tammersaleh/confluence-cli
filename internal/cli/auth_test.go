@@ -66,6 +66,11 @@ func TestAuthLogin_Success(t *testing.T) {
 		t.Errorf("stored creds = %+v, want email=ada@x token=s3cr3t (trimmed)", sc)
 	}
 
+	// Token value must never appear.
+	if strings.Contains(out.String(), "s3cr3t") {
+		t.Errorf("token value leaked into output: %q", out.String())
+	}
+
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 stdout lines, got %d: %q", len(lines), out.String())
