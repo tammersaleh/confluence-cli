@@ -4,12 +4,17 @@
 package bodywrite
 
 import (
+	"bytes"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/renderer/html"
 )
 
 // Read consumes a write command's body from stdin. It distinguishes an absent
@@ -33,12 +38,14 @@ func Read(r io.Reader) (present bool, body string, err error) {
 
 // Prepare validates a raw body for the given write format and returns the
 // Confluence body representation + value to send. format accepts "storage",
-// "adf", or "atlas_doc_format" (adf is the documented alias).
+// "adf"/"atlas_doc_format", or "markdown"/"md".
 //
-//	storage -> (representation="storage", value=raw), validated as a
-//	           well-formed XHTML fragment.
-//	adf     -> (representation="atlas_doc_format", value=compact JSON string),
-//	           validated as an ADF doc and re-marshaled to compact JSON.
+//	storage  -> (representation="storage", value=raw), validated as a
+//	            well-formed XHTML fragment.
+//	adf      -> (representation="atlas_doc_format", value=compact JSON string),
+//	            validated as an ADF doc and re-marshaled to compact JSON.
+//	markdown -> (representation="storage", value=XHTML rendered from the
+//	            Markdown by goldmark). The rendered XHTML is the storage value.
 func Prepare(format, raw string) (representation, value string, err error) {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "storage":
@@ -52,9 +59,42 @@ func Prepare(format, raw string) (representation, value string, err error) {
 			return "", "", err
 		}
 		return "atlas_doc_format", compact, nil
+	case "markdown", "md":
+		xhtml, err := markdownToStorage(raw)
+		if err != nil {
+			return "", "", err
+		}
+		return "storage", xhtml, nil
 	default:
-		return "", "", fmt.Errorf("unknown body format %q (use storage or adf)", format)
+		return "", "", fmt.Errorf("unknown body format %q (use storage, adf, or markdown)", format)
 	}
+}
+
+// markdownToStorage renders Markdown into Confluence storage-format XHTML.
+//
+// goldmark is configured with the GFM extension (tables, strikethrough,
+// autolinks) and XHTML output (self-closed void tags such as <br /> and
+// <hr />). Raw HTML embedded in the Markdown is kept escaped (WithUnsafe is
+// deliberately NOT set) so untrusted input can't inject storage macros or
+// scripts. Fenced code blocks render as <pre><code>...</code></pre>, a plain
+// preformatted block - NOT a Confluence code macro.
+//
+// The produced XHTML is run through the storage well-formedness validator as a
+// safety net; goldmark output should always pass.
+func markdownToStorage(raw string) (string, error) {
+	md := goldmark.New(
+		goldmark.WithExtensions(extension.GFM),
+		goldmark.WithRendererOptions(html.WithXHTML()),
+	)
+	var buf bytes.Buffer
+	if err := md.Convert([]byte(raw), &buf); err != nil {
+		return "", fmt.Errorf("failed to render markdown: %w", err)
+	}
+	out := buf.String()
+	if err := validateStorageFragment(out); err != nil {
+		return "", fmt.Errorf("rendered markdown is not well-formed storage XHTML: %w", err)
+	}
+	return out, nil
 }
 
 // validateStorageFragment checks that s is a well-formed XHTML fragment. An

@@ -217,9 +217,98 @@ func TestPrepareADFBadMarks(t *testing.T) {
 }
 
 func TestPrepareUnknownFormat(t *testing.T) {
-	for _, f := range []string{"markdown", "view", "xml"} {
+	for _, f := range []string{"view", "xml", "html"} {
 		if _, _, err := Prepare(f, "x"); err == nil {
 			t.Errorf("format %q: expected error", f)
 		}
+	}
+}
+
+func TestPrepareMarkdownBasics(t *testing.T) {
+	rep, val, err := Prepare("markdown", "# Title\n\nHello **world**")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rep != "storage" {
+		t.Errorf("rep = %q, want storage", rep)
+	}
+	if !strings.Contains(val, "<h1>Title</h1>") {
+		t.Errorf("value missing <h1>Title</h1>: %q", val)
+	}
+	if !strings.Contains(val, "<strong>world</strong>") {
+		t.Errorf("value missing <strong>world</strong>: %q", val)
+	}
+}
+
+func TestPrepareMarkdownAlias(t *testing.T) {
+	rep, val, err := Prepare("md", "# Title\n\nHello **world**")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rep != "storage" {
+		t.Errorf("rep = %q, want storage", rep)
+	}
+	if !strings.Contains(val, "<h1>Title</h1>") {
+		t.Errorf("value missing <h1>Title</h1>: %q", val)
+	}
+}
+
+func TestPrepareMarkdownList(t *testing.T) {
+	_, val, err := Prepare("markdown", "- a\n- b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(val, "<ul>") || !strings.Contains(val, "<li>") {
+		t.Errorf("value missing list markup: %q", val)
+	}
+}
+
+func TestPrepareMarkdownFencedCode(t *testing.T) {
+	_, val, err := Prepare("markdown", "```\ncode here\n```")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(val, "<pre><code") {
+		t.Errorf("value missing <pre><code: %q", val)
+	}
+}
+
+func TestPrepareMarkdownGFMTable(t *testing.T) {
+	in := "| a | b |\n| - | - |\n| 1 | 2 |"
+	_, val, err := Prepare("markdown", in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(val, "<table>") {
+		t.Errorf("value missing <table>: %q", val)
+	}
+}
+
+// A thematic break and an image both render as XHTML self-closing void tags.
+// The rendered output must pass the storage well-formedness validator (Prepare
+// runs it internally, so a nil error confirms the XHTML is parseable).
+func TestPrepareMarkdownSelfClosing(t *testing.T) {
+	_, val, err := Prepare("markdown", "before\n\n---\n\n![alt](img.png)")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(val, "<hr />") {
+		t.Errorf("value missing self-closed <hr />: %q", val)
+	}
+	if !strings.Contains(val, "<img ") || !strings.Contains(val, "/>") {
+		t.Errorf("value missing self-closed <img />: %q", val)
+	}
+}
+
+// Raw HTML in Markdown must be kept escaped (WithUnsafe not enabled) so it
+// can't inject storage macros. goldmark emits an HTML comment marker instead of
+// the raw tag; the point is the raw <script> does not pass through verbatim.
+func TestPrepareMarkdownRawHTMLEscaped(t *testing.T) {
+	_, val, err := Prepare("markdown", "<script>alert(1)</script>")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(val, "<script>") {
+		t.Errorf("raw <script> passed through unescaped: %q", val)
 	}
 }

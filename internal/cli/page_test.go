@@ -1196,6 +1196,28 @@ func TestPageCreate_ADFBody(t *testing.T) {
 	}
 }
 
+func TestPageCreate_MarkdownBody(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedCreate
+	server := pageCreateServer(t, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "# Title\n\nHello **world**")
+
+	cmd := &PageCreateCmd{Space: "ENG", Title: "MD Page", BodyFormat: "markdown"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if cap.bodyRep != "storage" {
+		t.Errorf("body representation = %q, want storage", cap.bodyRep)
+	}
+	if !strings.Contains(cap.bodyVal, "<h1>Title</h1>") || !strings.Contains(cap.bodyVal, "<strong>world</strong>") {
+		t.Errorf("body value not converted from markdown: %q", cap.bodyVal)
+	}
+}
+
 func TestPageCreate_NoBody(t *testing.T) {
 	clearCredEnv(t)
 	var cap capturedCreate

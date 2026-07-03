@@ -565,7 +565,7 @@ func resolveWriteBody(cli *CLI, bodyFormat string) (*confluence.WriteBody, error
 		return nil, &output.Error{
 			Err:    "invalid_input",
 			Detail: "a body was piped but --body-format is not set",
-			Hint:   "Pass --body-format storage or --body-format adf.",
+			Hint:   "Pass --body-format storage, adf, or markdown.",
 			Code:   output.ExitGeneral,
 		}
 	}
@@ -574,7 +574,7 @@ func resolveWriteBody(cli *CLI, bodyFormat string) (*confluence.WriteBody, error
 		return nil, &output.Error{
 			Err:    "invalid_body",
 			Detail: err.Error(),
-			Hint:   "Body must be valid storage XHTML or an ADF doc. See the skill.",
+			Hint:   "Body must be valid storage XHTML, an ADF doc, or Markdown. See the skill.",
 			Code:   output.ExitGeneral,
 		}
 	}
@@ -585,7 +585,7 @@ type PageCreateCmd struct {
 	Space      string `required:"" help:"Space key or URL."`
 	Title      string `required:"" help:"Page title."`
 	Parent     string `help:"Parent page ID or URL."`
-	BodyFormat string `help:"storage or adf (required when piping a body)."`
+	BodyFormat string `help:"storage, adf, or markdown (required when piping a body)."`
 }
 
 func (c *PageCreateCmd) Run(cli *CLI) error {
@@ -665,7 +665,7 @@ type PageUpdateCmd struct {
 	Ref        string `arg:"" name:"id-or-url" help:"Page ID or URL."`
 	IfVersion  int    `name:"if-version" required:"" help:"Expected current version; the update is rejected if it differs."`
 	Title      string `help:"New title (keeps current if omitted)."`
-	BodyFormat string `help:"storage or adf (required when piping a body)."`
+	BodyFormat string `help:"storage, adf, or markdown (required when piping a body)."`
 }
 
 func (c *PageUpdateCmd) Run(cli *CLI) error {

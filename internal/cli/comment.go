@@ -89,7 +89,7 @@ func (c *CommentListCmd) Run(cli *CLI) error {
 // supported.
 type CommentAddCmd struct {
 	Page       string `arg:"" name:"id-or-url" help:"Page ID or URL."`
-	BodyFormat string `help:"storage or adf."`
+	BodyFormat string `help:"storage, adf, or markdown (piped body)."`
 	Inline     bool   `help:"(not yet supported)"`
 }
 
@@ -129,7 +129,7 @@ func (c *CommentAddCmd) Run(cli *CLI) error {
 		return &output.Error{
 			Err:    "invalid_input",
 			Detail: "--body-format is required",
-			Hint:   "Pass --body-format storage or adf.",
+			Hint:   "Pass --body-format storage, adf, or markdown.",
 			Code:   output.ExitGeneral,
 		}
 	}
