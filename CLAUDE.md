@@ -213,6 +213,36 @@ follows it:
 - A push is not the finish line. After a release-cutting push, wait for the tag, upgrade the installed cask, and verify `confluence version` against the real artifact before calling a change done.
 - The pre-push hook runs `mise run check`; never bypass with `--no-verify`.
 
+## Notes for future sessions
+
+Learnings from the build worth keeping.
+
+### Pushing
+
+The SSH remote key is fingerprint/touch-gated, so a non-interactive `git push origin` over SSH fails. Push over HTTPS using the gh credential helper instead: run `gh auth setup-git` once, then `git push https://github.com/tammersaleh/confluence-sync.git main:main`.
+
+Exception: changes under `.github/workflows/` need a token with the `workflow` scope. The repo's gh and `RELEASE_PAT` tokens carry only `repo`, so workflow-file changes must be pushed over SSH (with the fingerprint) or with a workflow-scoped token.
+
+### Release flow
+
+Pushing to main triggers release-please, which opens a release PR that auto-merges on green CI, tags, and lets GoReleaser publish the cask to `tammersaleh/homebrew-tap`. Because release-please's merge advances remote main, fetch and rebase over HTTPS before each subsequent push:
+
+```bash
+git fetch https://github.com/tammersaleh/confluence-sync.git main && git rebase FETCH_HEAD
+```
+
+### Verifying the gate
+
+Check `mise run check`'s exit code directly. Piping it to `grep` masks a nonzero exit - a lint failure slipped through that way once. Run it and gate on the code:
+
+```bash
+mise run check > /tmp/c.txt 2>&1; echo $?
+```
+
+### Linting
+
+golangci-lint is pinned to v2. v1.64.x predates Go 1.25 and emits false-positive SA5011. gopls "modernize" hints (`interface{}`->`any`, `min`/`max`, `SplitSeq`) are NOT part of the golangci-lint gate; don't chase them.
+
 ## Dependencies
 
 Only direct dependency beyond stdlib is `github.com/alecthomas/kong` (Kong, not
