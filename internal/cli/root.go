@@ -228,6 +228,13 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Hint:   "Check the attachment ID. List a page's attachments with 'confluence attachment list <page-id|url>'.",
 			Code:   output.ExitGeneral,
 		}
+	case errors.Is(err, confluence.ErrCommentNotFound):
+		oErr = &output.Error{
+			Err:    "comment_not_found",
+			Detail: err.Error(),
+			Hint:   "Check the comment ID. List a page's comments with 'confluence comment list <page-id|url>'.",
+			Code:   output.ExitGeneral,
+		}
 	case errors.Is(err, confluence.ErrUserNotFound):
 		oErr = &output.Error{
 			Err:    "user_not_found",

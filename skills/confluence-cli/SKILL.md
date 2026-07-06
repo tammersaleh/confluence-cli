@@ -296,9 +296,13 @@ so there is no cursor. `--footer`/`--inline` narrow to one kind. Rows carry `id`
 `kind` (`footer`/`inline`), `body`, `author_id`, `created_at`, `web_url`. A
 missing page is a fatal `page_not_found`.
 
+`--replies` recursively drains each comment's reply thread, emitting replies
+after their parent with a `parent_id` pointing at the immediate parent.
+
 ```bash
 confluence comment list 123456
 confluence comment list 123456 --inline
+confluence comment list 123456 --replies
 ```
 
 ```jsonl

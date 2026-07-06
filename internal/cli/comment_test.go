@@ -109,6 +109,67 @@ func TestCommentList_FooterOnly(t *testing.T) {
 	}
 }
 
+// commentRepliesServer serves one footer comment f1 with a reply r1, and r1 has
+// a nested reply r2. Children endpoints return empty for leaves.
+func commentRepliesServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/wiki/api/v2/pages/123/footer-comments":
+			_, _ = w.Write([]byte(`{"results":[{"id":"f1","body":{"storage":{"value":"<p>one</p>"}},"version":{"authorId":"u1","createdAt":"t1"},"_links":{"webui":"/w/f1"}}],"_links":{"next":""}}`))
+		case "/wiki/api/v2/pages/123/inline-comments":
+			_, _ = w.Write([]byte(`{"results":[],"_links":{"next":""}}`))
+		case "/wiki/api/v2/footer-comments/f1/children":
+			_, _ = w.Write([]byte(`{"results":[{"id":"r1","body":{"storage":{"value":"<p>reply</p>"}},"version":{"authorId":"u2","createdAt":"t2"},"_links":{"webui":"/w/r1"}}],"_links":{"next":""}}`))
+		case "/wiki/api/v2/footer-comments/r1/children":
+			_, _ = w.Write([]byte(`{"results":[{"id":"r2","body":{"storage":{"value":"<p>nested</p>"}},"version":{"authorId":"u3","createdAt":"t3"},"_links":{"webui":"/w/r2"}}],"_links":{"next":""}}`))
+		case "/wiki/api/v2/footer-comments/r2/children":
+			_, _ = w.Write([]byte(`{"results":[],"_links":{"next":""}}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestCommentList_Replies(t *testing.T) {
+	clearCredEnv(t)
+	server := commentRepliesServer(t)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &CommentListCmd{Page: "123", Footer: true, Replies: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	// f1, r1 (child of f1), r2 (child of r1), then meta.
+	if len(lines) != 4 {
+		t.Fatalf("expected 3 rows + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["id"] != "f1" {
+		t.Errorf("row 0 should be f1: %v", lines[0])
+	}
+	if _, ok := lines[0]["parent_id"]; ok {
+		t.Errorf("top-level comment should not carry parent_id: %v", lines[0])
+	}
+	if lines[1]["id"] != "r1" || lines[1]["parent_id"] != "f1" || lines[1]["kind"] != "footer" {
+		t.Errorf("row 1 should be reply r1 of f1: %v", lines[1])
+	}
+	if lines[2]["id"] != "r2" || lines[2]["parent_id"] != "r1" {
+		t.Errorf("row 2 should be nested reply r2 of r1: %v", lines[2])
+	}
+}
+
 func TestCommentList_URLDerivesSite(t *testing.T) {
 	clearCredEnv(t)
 	server := commentServer(t)

@@ -1717,6 +1717,68 @@ func TestClient_GetInlineComments_NotFound(t *testing.T) {
 	}
 }
 
+func TestClient_GetCommentChildren_Footer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/footer-comments/c1/children" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"results": [
+				{"id": "r1", "body": {"storage": {"value": "<p>Reply</p>"}}, "version": {"authorId": "u3", "createdAt": "2024-02-01T00:00:00.000Z"}, "_links": {"webui": "/spaces/ENG/pages/123?focusedCommentId=r1"}}
+			],
+			"_links": {"next": "/wiki/api/v2/footer-comments/c1/children?cursor=NEXT"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	comments, nextCursor, err := c.GetCommentChildren(context.Background(), "c1", "footer", "", 25)
+	if err != nil {
+		t.Fatalf("GetCommentChildren() error: %v", err)
+	}
+	if len(comments) != 1 {
+		t.Fatalf("got %d comments, want 1", len(comments))
+	}
+	if comments[0].ID != "r1" || comments[0].Kind != "footer" || comments[0].Body != "<p>Reply</p>" {
+		t.Errorf("comment = %+v, want ID=r1 Kind=footer Body=<p>Reply</p>", comments[0])
+	}
+	if nextCursor != "NEXT" {
+		t.Errorf("nextCursor = %q, want NEXT", nextCursor)
+	}
+}
+
+func TestClient_GetCommentChildren_Inline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/inline-comments/c9/children" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{"results": [{"id": "r9", "body": {"storage": {"value": "<p>Re</p>"}}, "version": {"authorId": "u4"}}]}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	comments, _, err := c.GetCommentChildren(context.Background(), "c9", "inline", "", 25)
+	if err != nil {
+		t.Fatalf("GetCommentChildren() error: %v", err)
+	}
+	if len(comments) != 1 || comments[0].Kind != "inline" || comments[0].ID != "r9" {
+		t.Errorf("comments = %+v, want one inline reply r9", comments)
+	}
+}
+
+func TestClient_GetCommentChildren_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.GetCommentChildren(context.Background(), "c1", "footer", "", 25)
+	if !errors.Is(err, ErrCommentNotFound) {
+		t.Fatalf("expected ErrCommentNotFound, got %v", err)
+	}
+}
+
 func TestClient_GetLabels(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/wiki/api/v2/pages/123/labels" {

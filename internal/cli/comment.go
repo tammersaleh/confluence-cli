@@ -18,9 +18,10 @@ type CommentCmd struct {
 // inline comments; --footer or --inline narrow to a single kind. Each kind is
 // fully drained (comment counts per page are bounded), so no cursor is emitted.
 type CommentListCmd struct {
-	Page   string `arg:"" name:"id-or-url" help:"Page ID or URL."`
-	Footer bool   `help:"Only footer comments."`
-	Inline bool   `help:"Only inline comments."`
+	Page    string `arg:"" name:"id-or-url" help:"Page ID or URL."`
+	Footer  bool   `help:"Only footer comments."`
+	Inline  bool   `help:"Only inline comments."`
+	Replies bool   `help:"Also fetch replies (recursively), each with a parent_id linking to its parent."`
 }
 
 func (c *CommentListCmd) Run(cli *CLI) error {
@@ -43,6 +44,47 @@ func (c *CommentListCmd) Run(cli *CLI) error {
 
 	p := cli.NewPrinter()
 
+	printComment := func(cm confluence.Comment, parentID string) error {
+		row := map[string]any{
+			"id":         cm.ID,
+			"kind":       cm.Kind,
+			"body":       cm.Body,
+			"author_id":  cm.AuthorID,
+			"created_at": cm.CreatedAt,
+			"web_url":    cm.WebURL,
+		}
+		if parentID != "" {
+			row["parent_id"] = parentID
+		}
+		return p.PrintItem(row)
+	}
+
+	// drainReplies recursively emits the reply tree under a comment. Each reply
+	// carries a parent_id pointing at its immediate parent. Comment threads are
+	// bounded, so every level is fully drained (no cursor surfaced).
+	var drainReplies func(commentID, kind string) error
+	drainReplies = func(commentID, kind string) error {
+		cursor := ""
+		for {
+			replies, next, err := client.GetCommentChildren(ctx, commentID, kind, cursor, 0)
+			if err != nil {
+				return cli.ClassifyError(err)
+			}
+			for _, rc := range replies {
+				if err := printComment(rc, commentID); err != nil {
+					return err
+				}
+				if err := drainReplies(rc.ID, rc.Kind); err != nil {
+					return err
+				}
+			}
+			if next == "" {
+				return nil
+			}
+			cursor = next
+		}
+	}
+
 	drain := func(fetch func(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Comment, string, error)) error {
 		cursor := ""
 		for {
@@ -51,16 +93,13 @@ func (c *CommentListCmd) Run(cli *CLI) error {
 				return cli.ClassifyError(err)
 			}
 			for _, cm := range comments {
-				row := map[string]any{
-					"id":         cm.ID,
-					"kind":       cm.Kind,
-					"body":       cm.Body,
-					"author_id":  cm.AuthorID,
-					"created_at": cm.CreatedAt,
-					"web_url":    cm.WebURL,
-				}
-				if err := p.PrintItem(row); err != nil {
+				if err := printComment(cm, ""); err != nil {
 					return err
+				}
+				if c.Replies {
+					if err := drainReplies(cm.ID, cm.Kind); err != nil {
+						return err
+					}
 				}
 			}
 			if next == "" {

@@ -113,6 +113,10 @@ func (m *mockClient) GetInlineComments(ctx context.Context, pageID, cursor strin
 	return nil, "", nil
 }
 
+func (m *mockClient) GetCommentChildren(ctx context.Context, commentID, kind, cursor string, limit int) ([]confluence.Comment, string, error) {
+	return nil, "", nil
+}
+
 func (m *mockClient) GetLabels(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Label, string, error) {
 	return nil, "", nil
 }

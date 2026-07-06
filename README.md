@@ -387,9 +387,13 @@ kind; without either, both are emitted. Rows carry `id`, `kind`
 (`footer`/`inline`), `body`, `author_id`, `created_at`, and `web_url`. A missing
 page is a fatal `page_not_found`.
 
+`--replies` drains each comment's reply thread recursively and emits the replies
+after their parent, each with a `parent_id` pointing at its immediate parent.
+
 ```bash
 confluence comment list 123456
 confluence comment list 123456 --inline
+confluence comment list 123456 --replies
 ```
 
 ```jsonl

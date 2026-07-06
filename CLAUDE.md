@@ -28,7 +28,7 @@ internal/
     page.go                    `page list/get/children/descendants/ancestors/tree` (reads) + `page create/update/delete` (writes). Derives site/space from --space or URL args; --body-format incl. derived markdown on read. `page tree` builds the hierarchy in-command, sorted by ID (not display order). `page update` preflights GetPage to enforce --if-version (version_conflict) and preserve title/body when not supplied.
     attachment.go              `attachment list`, `attachment download`, `attachment upload` commands.
     search.go                  `search <cql>` command. CQL positional, site-wide, paginated (--limit/--cursor/--all).
-    comment.go                 `comment list` + `comment add` (footer, or inline via --inline --selection-text with --match-index/--match-count).
+    comment.go                 `comment list` (footer + inline; --replies drains reply threads recursively with parent_id) + `comment add` (footer, or inline via --inline --selection-text with --match-index/--match-count).
     label.go                   `label list`, `label add`, `label remove`. Add/remove are per-label (independent, inline errors).
     user.go                    `user current` and `user info <accountId>...` commands.
   output/
@@ -139,7 +139,7 @@ The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `p
 - `confluence attachment download <id> [-o|--out <path>]` - download an attachment by id (not a URL) to a file; defaults to the attachment filename in the current dir. Emits `id`, `title`, `media_type`, `path`, `bytes`.
 - `confluence attachment upload <page id|url> <file>...` - upload files as attachments (per-file, inline errors). A filename collision creates a new version. Rows echo `input` and carry `page_id`, `attachment_id`, `title`, `media_type`, `uploaded:true`.
 - `confluence search <cql>` - CQL search. The CQL is the positional arg; site-wide (from `--site` or the single stored default). Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `space_key`, `excerpt`, `url`.
-- `confluence comment list <page id|url>` - a page's comments. Drains footer + inline (no cursor); `--footer`/`--inline` narrow to one kind. Rows carry `id`, `kind` (`footer`/`inline`), `body`, `author_id`, `created_at`, `web_url`. A missing page is a fatal `page_not_found`.
+- `confluence comment list <page id|url>` - a page's comments. Drains footer + inline (no cursor); `--footer`/`--inline` narrow to one kind. `--replies` recursively drains reply threads, emitting each reply after its parent with a `parent_id`. Rows carry `id`, `kind` (`footer`/`inline`), `body`, `author_id`, `created_at`, `web_url`. A missing page is a fatal `page_not_found`.
 - `confluence comment add <page id|url> --body-format storage|adf|markdown` - add a comment; body on stdin (required). Footer by default; `--inline --selection-text <text> [--match-index N] [--match-count N]` anchors an inline comment to on-page text. Row: `id`, `page_id`, `kind` (`footer`/`inline`), `body_format`, `web_url`; inline rows also carry `selection_text`.
 - `confluence label list <page id|url>` - a page's labels, fully drained. Rows carry `id`, `name`, `prefix`.
 - `confluence label add <page id|url> <label>...` - add labels (per-label, inline errors). Rows carry `page_id`, `name`, `prefix`, `added:true`.

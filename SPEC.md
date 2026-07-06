@@ -468,17 +468,26 @@ $ confluence search 'type = page AND text ~ "runbook"'
 ### comment list
 
 ```text
-confluence comment list <page id|url> [--footer] [--inline]
+confluence comment list <page id|url> [--footer] [--inline] [--replies]
 ```
 
 List a page's comments. The argument is a numeric page id or a page URL. Footer and inline comments are fully drained, so there is no cursor and the trailer never carries `next_cursor`. `--footer` and `--inline` narrow the output to one kind; without either, both are emitted. A missing page is a fatal `page_not_found`.
 
 Each row carries `id`, `kind` (`footer` or `inline`), `body`, `author_id`, `created_at`, and `web_url`.
 
+With `--replies`, each comment's reply thread is drained recursively (comment threads are bounded) and emitted after its parent. Reply rows carry an additional `parent_id` pointing at their immediate parent comment; top-level comments omit it.
+
 ```jsonl
 $ confluence comment list 123456
 {"id":"c1","kind":"footer","body":"<p>Looks good to me.</p>","author_id":"a1","created_at":"2024-06-20T14:45:00.000Z","created_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c1"}
 {"id":"c2","kind":"inline","body":"<p>Clarify this section.</p>","author_id":"a2","created_at":"2024-06-21T09:00:00.000Z","created_at_iso":"2024-06-21T09:00:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c2"}
+{"_meta":{"has_more":false}}
+```
+
+```jsonl
+$ confluence comment list 123456 --footer --replies
+{"id":"c1","kind":"footer","body":"<p>Looks good to me.</p>","author_id":"a1","created_at":"2024-06-20T14:45:00.000Z","created_at_iso":"2024-06-20T14:45:00Z","web_url":"..."}
+{"id":"r1","kind":"footer","parent_id":"c1","body":"<p>Agreed.</p>","author_id":"a3","created_at":"2024-06-20T15:00:00.000Z","created_at_iso":"2024-06-20T15:00:00Z","web_url":"..."}
 {"_meta":{"has_more":false}}
 ```
 

@@ -13,6 +13,7 @@ var (
 	ErrAttachmentNotFound = errors.New("attachment not found") // 404 from attachment-by-id lookups
 	ErrNotFound           = errors.New("not found")            // generic 404 from doRequest
 	ErrUserNotFound       = errors.New("user not found")       // 404 from user-by-id lookups
+	ErrCommentNotFound    = errors.New("comment not found")    // 404 from comment-children lookups
 	ErrUnauthorized       = errors.New("unauthorized")
 	ErrForbidden          = errors.New("forbidden")
 	ErrAPIError           = errors.New("API error")
@@ -202,6 +203,7 @@ type Client interface {
 	Search(ctx context.Context, cql, cursor string, limit int) (results []SearchResult, nextCursor string, err error)
 	GetFooterComments(ctx context.Context, pageID, cursor string, limit int) (comments []Comment, nextCursor string, err error)
 	GetInlineComments(ctx context.Context, pageID, cursor string, limit int) (comments []Comment, nextCursor string, err error)
+	GetCommentChildren(ctx context.Context, commentID, kind, cursor string, limit int) (comments []Comment, nextCursor string, err error)
 	GetLabels(ctx context.Context, pageID, cursor string, limit int) (labels []Label, nextCursor string, err error)
 	GetSpace(ctx context.Context, spaceKey string) (*Space, error)
 	GetSpaceByID(ctx context.Context, spaceID string) (*Space, error)

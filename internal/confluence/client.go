@@ -502,6 +502,67 @@ func (c *client) GetInlineComments(ctx context.Context, pageID, cursor string, l
 	return c.getComments(ctx, pageID, "inline-comments", "inline", cursor, limit)
 }
 
+// GetCommentChildren fetches one API page of direct replies to a comment. kind
+// selects the resource ("footer" -> footer-comments, otherwise inline-comments)
+// since replies live under the same resource as their parent; returned comments
+// carry that same kind. A 404 maps to ErrCommentNotFound.
+func (c *client) GetCommentChildren(ctx context.Context, commentID, kind, cursor string, limit int) (comments []Comment, nextCursor string, err error) {
+	resource := "inline-comments"
+	if kind == "footer" {
+		resource = "footer-comments"
+	}
+	if limit <= 0 {
+		limit = 25
+	}
+	query := url.Values{}
+	query.Set("body-format", "storage")
+	query.Set("limit", fmt.Sprintf("%d", limit))
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+
+	path := fmt.Sprintf("/wiki/api/v2/%s/%s/children", resource, commentID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, query)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, "", ErrCommentNotFound
+		}
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result commentsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	comments = make([]Comment, 0, len(result.Results))
+	for _, r := range result.Results {
+		webURL := r.Links.WebUI
+		if webURL != "" && !strings.HasPrefix(webURL, "http") {
+			if !strings.HasPrefix(webURL, "/wiki") {
+				webURL = "/wiki" + webURL
+			}
+			webURL = c.baseURL + webURL
+		}
+		comments = append(comments, Comment{
+			ID:        r.ID,
+			Kind:      kind,
+			Body:      r.Body.Storage.Value,
+			AuthorID:  r.Version.AuthorID,
+			CreatedAt: r.Version.CreatedAt,
+			WebURL:    webURL,
+		})
+	}
+
+	if hdr := resp.Header.Get("Link"); hdr != "" {
+		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
+			return comments, cur, nil
+		}
+	}
+	return comments, cursorFromNext(result.Links.Next), nil
+}
+
 type labelsResponse struct {
 	Results []struct {
 		ID     string `json:"id"`
