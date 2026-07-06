@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.10.0](https://github.com/tammersaleh/confluence-cli/compare/v1.9.0...v1.10.0) (2026-07-06)
+
+
+### Features
+
+* add --resolve-authors to page get and comment list ([5cf23bb](https://github.com/tammersaleh/confluence-cli/commit/5cf23bb4a9d3dd9b6e5f256a6a80e259bb9fdb9e))
+* add comment replies via comment list --replies ([3a986ad](https://github.com/tammersaleh/confluence-cli/commit/3a986ada9f79eef8a3594f13e25584f99df906b9))
+* add page descendants command ([bee037b](https://github.com/tammersaleh/confluence-cli/commit/bee037b09a438d10f26c2d7fc3e459d605499bfb))
+
 ## [1.9.0](https://github.com/tammersaleh/confluence-cli/compare/v1.8.0...v1.9.0) (2026-07-06)
 
 
