@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tammersaleh/confluence-sync/internal/confluence"
-	"github.com/tammersaleh/confluence-sync/internal/converter"
-	"github.com/tammersaleh/confluence-sync/internal/filesystem"
-	"github.com/tammersaleh/confluence-sync/pkg/sanitize"
+	"github.com/tammersaleh/confluence-cli/internal/confluence"
+	"github.com/tammersaleh/confluence-cli/internal/converter"
+	"github.com/tammersaleh/confluence-cli/internal/filesystem"
+	"github.com/tammersaleh/confluence-cli/pkg/sanitize"
 )
 
 type Options struct {

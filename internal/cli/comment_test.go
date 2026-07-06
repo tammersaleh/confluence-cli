@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 // commentServer serves footer-comments (two pages, to prove draining) and

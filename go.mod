@@ -1,4 +1,4 @@
-module github.com/tammersaleh/confluence-sync
+module github.com/tammersaleh/confluence-cli
 
 go 1.25.5
 

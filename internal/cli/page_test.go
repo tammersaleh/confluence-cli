@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 // pageListServer returns an httptest server that serves a space by key and one

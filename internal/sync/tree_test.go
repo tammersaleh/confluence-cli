@@ -3,7 +3,7 @@ package sync
 import (
 	"testing"
 
-	"github.com/tammersaleh/confluence-sync/internal/confluence"
+	"github.com/tammersaleh/confluence-cli/internal/confluence"
 )
 
 func TestBuildTree(t *testing.T) {

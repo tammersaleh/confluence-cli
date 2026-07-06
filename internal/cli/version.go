@@ -1,11 +1,11 @@
 package cli
 
 import (
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 // Version is set at build time via -ldflags
-// (target: github.com/tammersaleh/confluence-sync/internal/cli.Version).
+// (target: github.com/tammersaleh/confluence-cli/internal/cli.Version).
 var Version = "dev"
 
 type VersionCmd struct{}

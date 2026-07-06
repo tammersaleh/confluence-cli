@@ -249,7 +249,7 @@ format and validation model before writing command code.
   go, include-component-in-tag false).
 - `.githooks/pre-push` → `mise run check`; `.mise.toml` `setup-hooks` task.
 - `skills/confluence-cli/SKILL.md` with `allowed-tools: Bash(confluence *)`,
-  installed via `skills add tammersaleh/confluence-sync -g`.
+  installed via `skills add tammersaleh/confluence-cli -g`.
 - Rewrite `README.md` and `CLAUDE.md` for the new scope, workflow, and release
   discipline (conventional commits drive releases).
 

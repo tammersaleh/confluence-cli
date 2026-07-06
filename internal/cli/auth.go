@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tammersaleh/confluence-sync/internal/auth"
-	"github.com/tammersaleh/confluence-sync/internal/confluence"
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/auth"
+	"github.com/tammersaleh/confluence-cli/internal/confluence"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 // AuthCmd groups the authentication subcommands.

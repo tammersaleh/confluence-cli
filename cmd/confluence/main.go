@@ -6,8 +6,8 @@ import (
 	"os"
 
 	"github.com/alecthomas/kong"
-	"github.com/tammersaleh/confluence-sync/internal/cli"
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/cli"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 func main() {

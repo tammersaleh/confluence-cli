@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 func TestClassifyError(t *testing.T) {

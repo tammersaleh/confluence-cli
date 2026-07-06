@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tammersaleh/confluence-sync/internal/httpx"
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/httpx"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 func TestClient_GetSpace(t *testing.T) {

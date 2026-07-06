@@ -1,7 +1,7 @@
-# confluence-sync
+# confluence-cli
 
 Agent-first Confluence CLI. The binary is `confluence`; the repository and Go
-module stay `confluence-sync` (mirroring `slack`→`slack-cli`). Output is JSONL,
+module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). Output is JSONL,
 one JSON object per line; commands are non-interactive and scriptable. Built on
 Kong. Auth is an API token + email over HTTP Basic.
 
@@ -219,7 +219,7 @@ Learnings from the build worth keeping.
 
 ### Pushing
 
-The SSH remote key is fingerprint/touch-gated, so a non-interactive `git push origin` over SSH fails. Push over HTTPS using the gh credential helper instead: run `gh auth setup-git` once, then `git push https://github.com/tammersaleh/confluence-sync.git main:main`.
+The SSH remote key is fingerprint/touch-gated, so a non-interactive `git push origin` over SSH fails. Push over HTTPS using the gh credential helper instead: run `gh auth setup-git` once, then `git push https://github.com/tammersaleh/confluence-cli.git main:main`.
 
 Exception: changes under `.github/workflows/` need a token with the `workflow` scope. The repo's gh and `RELEASE_PAT` tokens carry only `repo`, so workflow-file changes must be pushed over SSH (with the fingerprint) or with a workflow-scoped token.
 
@@ -228,7 +228,7 @@ Exception: changes under `.github/workflows/` need a token with the `workflow` s
 Pushing to main triggers release-please, which opens a release PR that auto-merges on green CI, tags, and lets GoReleaser publish the cask to `tammersaleh/homebrew-tap`. Because release-please's merge advances remote main, fetch and rebase over HTTPS before each subsequent push:
 
 ```bash
-git fetch https://github.com/tammersaleh/confluence-sync.git main && git rebase FETCH_HEAD
+git fetch https://github.com/tammersaleh/confluence-cli.git main && git rebase FETCH_HEAD
 ```
 
 ### Verifying the gate

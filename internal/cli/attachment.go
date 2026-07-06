@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/tammersaleh/confluence-sync/internal/confluenceurl"
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/confluenceurl"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 type AttachmentCmd struct {

@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tammersaleh/confluence-sync/internal/httpx"
+	"github.com/tammersaleh/confluence-cli/internal/httpx"
 )
 
 const (

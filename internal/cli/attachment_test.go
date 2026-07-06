@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 // attachmentListServer serves /wiki/api/v2/pages/{id}/attachments. Any id in

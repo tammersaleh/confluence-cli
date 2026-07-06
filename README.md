@@ -1,7 +1,7 @@
-# confluence-sync
+# confluence-cli
 
 An agent-first Confluence CLI. The binary is `confluence`; the repository and Go
-module stay `confluence-sync`. Output is JSONL (one JSON object per line);
+module are `confluence-cli`. Output is JSONL (one JSON object per line);
 commands are non-interactive and scriptable, built for LLM agents and CI.
 
 The read and write surface ships today: `version`, `space sync`, `space info`,
@@ -21,7 +21,7 @@ brew install --cask tammersaleh/tap/confluence-cli
 Or with Go:
 
 ```bash
-go install github.com/tammersaleh/confluence-sync/cmd/confluence@latest
+go install github.com/tammersaleh/confluence-cli/cmd/confluence@latest
 ```
 
 ## Auth

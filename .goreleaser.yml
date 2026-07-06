@@ -13,7 +13,7 @@ builds:
     goos: [darwin, linux]
     goarch: [amd64, arm64]
     ldflags:
-      - -s -w -X github.com/tammersaleh/confluence-sync/internal/cli.Version={{.Version}}
+      - -s -w -X github.com/tammersaleh/confluence-cli/internal/cli.Version={{.Version}}
 
 archives:
   - formats: [tar.gz]
@@ -35,7 +35,7 @@ homebrew_casks:
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Casks
-    homepage: https://github.com/tammersaleh/confluence-sync
+    homepage: https://github.com/tammersaleh/confluence-cli
     description: Agent-first Confluence CLI
     hooks:
       post:

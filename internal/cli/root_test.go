@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/tammersaleh/confluence-sync/internal/confluence"
-	"github.com/tammersaleh/confluence-sync/internal/httpx"
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/confluence"
+	"github.com/tammersaleh/confluence-cli/internal/httpx"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 func TestClassifyError(t *testing.T) {

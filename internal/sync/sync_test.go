@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tammersaleh/confluence-sync/internal/confluence"
-	"github.com/tammersaleh/confluence-sync/internal/filesystem"
+	"github.com/tammersaleh/confluence-cli/internal/confluence"
+	"github.com/tammersaleh/confluence-cli/internal/filesystem"
 )
 
 type mockClient struct {

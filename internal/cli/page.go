@@ -6,11 +6,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/tammersaleh/confluence-sync/internal/bodywrite"
-	"github.com/tammersaleh/confluence-sync/internal/confluence"
-	"github.com/tammersaleh/confluence-sync/internal/confluenceurl"
-	"github.com/tammersaleh/confluence-sync/internal/converter"
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/bodywrite"
+	"github.com/tammersaleh/confluence-cli/internal/confluence"
+	"github.com/tammersaleh/confluence-cli/internal/confluenceurl"
+	"github.com/tammersaleh/confluence-cli/internal/converter"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 type PageCmd struct {

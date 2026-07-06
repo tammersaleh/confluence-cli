@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 // clearCredEnv unsets every env var ResolveCredentials consults so tests are

@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 type UserCmd struct {

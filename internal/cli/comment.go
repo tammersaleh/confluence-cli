@@ -4,9 +4,9 @@ import (
 	"context"
 	"strings"
 
-	"github.com/tammersaleh/confluence-sync/internal/bodywrite"
-	"github.com/tammersaleh/confluence-sync/internal/confluence"
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/bodywrite"
+	"github.com/tammersaleh/confluence-cli/internal/confluence"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 type CommentCmd struct {

@@ -3,7 +3,7 @@ package sync
 import (
 	"slices"
 
-	"github.com/tammersaleh/confluence-sync/internal/confluence"
+	"github.com/tammersaleh/confluence-cli/internal/confluence"
 )
 
 type PageNode struct {

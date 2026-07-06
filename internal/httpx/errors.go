@@ -7,7 +7,7 @@ import (
 	"net"
 	"net/url"
 
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 // RateLimitError is returned by transport/pagination helpers when rate-limit

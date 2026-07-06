@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tammersaleh/confluence-sync/internal/auth"
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/auth"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 // currentUserServer returns an httptest.Server that answers the current-user

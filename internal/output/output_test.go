@@ -138,7 +138,7 @@ func TestPrintError(t *testing.T) {
 	e := &Error{
 		Err:    "page_not_found",
 		Detail: "No page matching 'nope'",
-		Hint:   "Run 'confluence-sync ...' to list pages",
+		Hint:   "Run 'confluence page list ...' to list pages",
 		Code:   ExitGeneral,
 	}
 	if err := p.PrintError(e); err != nil {

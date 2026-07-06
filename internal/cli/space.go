@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/tammersaleh/confluence-sync/internal/auth"
-	"github.com/tammersaleh/confluence-sync/internal/confluence"
-	"github.com/tammersaleh/confluence-sync/internal/confluenceurl"
-	"github.com/tammersaleh/confluence-sync/internal/filesystem"
-	"github.com/tammersaleh/confluence-sync/internal/output"
-	"github.com/tammersaleh/confluence-sync/internal/sync"
+	"github.com/tammersaleh/confluence-cli/internal/auth"
+	"github.com/tammersaleh/confluence-cli/internal/confluence"
+	"github.com/tammersaleh/confluence-cli/internal/confluenceurl"
+	"github.com/tammersaleh/confluence-cli/internal/filesystem"
+	"github.com/tammersaleh/confluence-cli/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/sync"
 )
 
 type SpaceCmd struct {

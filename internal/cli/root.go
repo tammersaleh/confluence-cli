@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tammersaleh/confluence-sync/internal/auth"
-	"github.com/tammersaleh/confluence-sync/internal/confluence"
-	"github.com/tammersaleh/confluence-sync/internal/httpx"
-	"github.com/tammersaleh/confluence-sync/internal/output"
+	"github.com/tammersaleh/confluence-cli/internal/auth"
+	"github.com/tammersaleh/confluence-cli/internal/confluence"
+	"github.com/tammersaleh/confluence-cli/internal/httpx"
+	"github.com/tammersaleh/confluence-cli/internal/output"
 )
 
 // CLI holds global flags and subcommands. Global flags are shared by every

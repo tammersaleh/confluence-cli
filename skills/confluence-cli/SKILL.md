@@ -23,9 +23,9 @@ full command surface is available.
 
 Requires the `confluence` binary on PATH. If `command not found`, install it:
 `brew install tammersaleh/tap/confluence-cli` (macOS) or
-`go install github.com/tammersaleh/confluence-sync/cmd/confluence@latest`.
+`go install github.com/tammersaleh/confluence-cli/cmd/confluence@latest`.
 
-Skill install/update: `skills add tammersaleh/confluence-sync -g` /
+Skill install/update: `skills add tammersaleh/confluence-cli -g` /
 `skills update`.
 
 ## Auth
