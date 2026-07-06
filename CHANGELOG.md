@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/tammersaleh/confluence-cli/compare/v1.8.0...v1.9.0) (2026-07-06)
+
+
+### Features
+
+* rename module and repo to confluence-cli ([2eb2f2d](https://github.com/tammersaleh/confluence-cli/commit/2eb2f2def799c251a4b681336976ef91ce9e9b0e))
+
 ## [1.8.0](https://github.com/tammersaleh/confluence-sync/compare/v1.7.0...v1.8.0) (2026-07-03)
 
 
