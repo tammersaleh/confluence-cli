@@ -8,7 +8,8 @@ Kong. Auth is an API token + email over HTTP Basic.
 `SPEC.md` is the source of truth for the full command surface and output
 contract. The read and write surface ships today: `version`, `space sync`,
 `space info`, `space list`, `auth`, `page list`, `page get`, `page children`,
-`page ancestors`, `page tree`, `page create`, `page update`, `page delete`,
+`page descendants`, `page ancestors`, `page tree`, `page create`, `page update`,
+`page delete`,
 `attachment list`, `attachment download`, `attachment upload`, `search`,
 `comment list`, `comment add`, `label list`, `label add`, `label remove`,
 `user current`, and `user info`. The full command surface is implemented. See

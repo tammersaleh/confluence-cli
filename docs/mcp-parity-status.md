@@ -33,7 +33,7 @@ MCP `getConfluencePageDescendants`. All descendants under a page, all levels.
 - Tests: client_test.go (items+depth+cursor, default limit 25, 404) ; page_test.go (rows, --all, URL-site, 404)
 - Docs: SPEC/CLAUDE/README/SKILL add page descendants
 
-### 2. comment replies  (STATUS: not started)
+### 2. comment replies  (STATUS: DONE - comment list --replies, recursive, committed)
 MCP `getConfluenceCommentChildren`. Replies to a comment.
 - Domain: `GetCommentChildren(ctx, commentID, cursor, limit) ([]Comment, next, err)`
   - GET /wiki/api/v2/footer-comments/{id}/children (and inline variant) ; reuse Comment type
@@ -42,13 +42,18 @@ MCP `getConfluenceCommentChildren`. Replies to a comment.
   `comment children <id>` subcommand. Decide during impl; --replies preferred.
 - Tests + docs.
 
-### 3. author name enrichment  (STATUS: not started)
-Resolve author_id -> author_name on page/comment rows (best-effort, cached
-GetUser lookups; opt-in --resolve-authors or automatic like slack-cli). Emit
-author_name sibling. Affects page get, comment list (rows with author_id).
+### 3. author name enrichment  (STATUS: DONE - --resolve-authors opt-in, committed)
+Resolved via opt-in `--resolve-authors` on page get + comment list, backed by a
+per-invocation cached authorResolver (internal/cli/authors.go). Best-effort:
+failed lookup omits author_name. Chose opt-in (not automatic) to avoid surprise
+per-author API calls on every read.
 
 ## After the code
-- Docs pass: move all three into "available now"; update KNOWN_ISSUES if needed.
-- Release (push main over HTTPS: `git fetch https://github.com/tammersaleh/confluence-cli.git main && git rebase FETCH_HEAD && git push https://...`; SSH is fingerprint-gated; .github/workflows changes need SSH/workflow-scope).
+- Docs pass: DONE (all three in SPEC/README/SKILL/CLAUDE "available now").
+- Code review: DONE (feature-dev:code-reviewer + Codex, both clean).
+- Release: PENDING owner approval. Push main over HTTPS:
+  `git fetch https://github.com/tammersaleh/confluence-cli.git main && git rebase FETCH_HEAD && git push https://...`
+  (SSH is fingerprint-gated; .github/workflows changes need SSH/workflow-scope).
+  Pushing auto-cuts a release (release-please -> GoReleaser -> Homebrew cask).
 - Then: authentication + live testing discussion with owner (CLI not yet authed;
   nothing past space sync is live-verified).
