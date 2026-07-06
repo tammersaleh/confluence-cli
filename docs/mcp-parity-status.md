@@ -51,9 +51,8 @@ per-author API calls on every read.
 ## After the code
 - Docs pass: DONE (all three in SPEC/README/SKILL/CLAUDE "available now").
 - Code review: DONE (feature-dev:code-reviewer + Codex, both clean).
-- Release: PENDING owner approval. Push main over HTTPS:
-  `git fetch https://github.com/tammersaleh/confluence-cli.git main && git rebase FETCH_HEAD && git push https://...`
-  (SSH is fingerprint-gated; .github/workflows changes need SSH/workflow-scope).
-  Pushing auto-cuts a release (release-please -> GoReleaser -> Homebrew cask).
+- Release: DONE. Shipped in v1.10.0 (PR #11 auto-merged, GoReleaser published the
+  cask; `confluence version` -> 1.10.0 verified against the installed cask, all
+  three new commands/flags present in the released binary).
 - Then: authentication + live testing discussion with owner (CLI not yet authed;
   nothing past space sync is live-verified).
