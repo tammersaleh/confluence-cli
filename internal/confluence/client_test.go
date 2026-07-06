@@ -448,6 +448,74 @@ func TestClient_ListChildren_NotFound(t *testing.T) {
 	}
 }
 
+func TestClient_GetDescendants(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/pages/100/descendants" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"results": [
+				{"id": "1", "title": "Child", "type": "page", "parentId": "100", "depth": 1},
+				{"id": "2", "title": "Grandchild", "type": "page", "parentId": "1", "depth": 2}
+			],
+			"_links": {"next": "/wiki/api/v2/pages/100/descendants?limit=25&cursor=NEXT"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	descs, nextCursor, err := c.GetDescendants(context.Background(), "100", "", 25)
+	if err != nil {
+		t.Fatalf("GetDescendants() error: %v", err)
+	}
+	if len(descs) != 2 {
+		t.Fatalf("got %d descendants, want 2", len(descs))
+	}
+	if descs[0].ID != "1" || descs[0].Title != "Child" || descs[0].Type != "page" {
+		t.Errorf("descs[0] = %+v, want ID=1 Title=Child Type=page", descs[0])
+	}
+	if descs[0].ParentID != "100" || descs[0].Depth != 1 {
+		t.Errorf("descs[0] parent/depth = %q/%d, want 100/1", descs[0].ParentID, descs[0].Depth)
+	}
+	if descs[1].Depth != 2 || descs[1].ParentID != "1" {
+		t.Errorf("descs[1] parent/depth = %q/%d, want 1/2", descs[1].ParentID, descs[1].Depth)
+	}
+	if nextCursor != "NEXT" {
+		t.Errorf("nextCursor = %q, want NEXT", nextCursor)
+	}
+}
+
+func TestClient_GetDescendants_DefaultLimit(t *testing.T) {
+	var gotLimit string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotLimit = r.URL.Query().Get("limit")
+		w.Write([]byte(`{"results": []}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.GetDescendants(context.Background(), "100", "", 0)
+	if err != nil {
+		t.Fatalf("GetDescendants() error: %v", err)
+	}
+	if gotLimit != "25" {
+		t.Errorf("limit = %q, want 25", gotLimit)
+	}
+}
+
+func TestClient_GetDescendants_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.GetDescendants(context.Background(), "100", "", 25)
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
 func TestClient_GetAncestors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/wiki/api/v2/pages/100/ancestors" {

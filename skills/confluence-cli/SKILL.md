@@ -12,7 +12,7 @@ Agent-first CLI for Confluence. JSONL output (one JSON object per line). Every
 command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 
 Both reads and writes ship today: `version`, `space sync`, `space info`,
-`space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`,
+`space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
 `page tree`, `page create`, `page update`, `page delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
@@ -189,6 +189,24 @@ confluence page children 123400 --all
 
 ```jsonl
 {"id":"123456","title":"API Design","type":"page"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### page descendants
+
+All descendants of a page - every level, not just direct children (numeric id or
+page URL). Page with `--limit`/`--cursor`, or drain with `--all`. Rows carry
+`id`, `title`, `type`, `depth` (1 for a direct child), and `parent_id` when the
+API returns it.
+
+```bash
+confluence page descendants 123400
+confluence page descendants 123400 --all
+```
+
+```jsonl
+{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400"}
+{"id":"123999","title":"Auth flow","type":"page","depth":2,"parent_id":"123456"}
 {"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
 ```
 

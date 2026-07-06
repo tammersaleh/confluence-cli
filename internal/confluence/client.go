@@ -897,6 +897,68 @@ func (c *client) ListChildren(ctx context.Context, pageID, cursor string, limit 
 	return pages, cursorFromNext(result.Links.Next), nil
 }
 
+type descendantsResponse struct {
+	Results []struct {
+		ID       string `json:"id"`
+		Title    string `json:"title"`
+		Type     string `json:"type"`
+		ParentID string `json:"parentId"`
+		Depth    int    `json:"depth"`
+	} `json:"results"`
+	Links struct {
+		Next string `json:"next"`
+	} `json:"_links"`
+}
+
+// GetDescendants returns exactly one API page of descendants of pageID (every
+// level below it, not just direct children). Each item carries depth (1 for a
+// direct child) and parentId. Type is passed through from the API ("page",
+// "database", "folder").
+func (c *client) GetDescendants(ctx context.Context, pageID, cursor string, limit int) (descendants []Descendant, nextCursor string, err error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	query := url.Values{}
+	query.Set("limit", fmt.Sprintf("%d", limit))
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+
+	path := fmt.Sprintf("/wiki/api/v2/pages/%s/descendants", pageID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, query)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, "", ErrPageNotFound
+		}
+		return nil, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result descendantsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("decoding response: %w", err)
+	}
+
+	descendants = make([]Descendant, 0, len(result.Results))
+	for _, d := range result.Results {
+		descendants = append(descendants, Descendant{
+			ID:       d.ID,
+			Title:    d.Title,
+			Type:     d.Type,
+			ParentID: d.ParentID,
+			Depth:    d.Depth,
+		})
+	}
+
+	// Prefer the Link response header if present, else the body's _links.next.
+	if hdr := resp.Header.Get("Link"); hdr != "" {
+		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
+			return descendants, cur, nil
+		}
+	}
+	return descendants, cursorFromNext(result.Links.Next), nil
+}
+
 type ancestorsResponse struct {
 	Results []struct {
 		ID   string `json:"id"`

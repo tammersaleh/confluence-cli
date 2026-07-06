@@ -14,14 +14,15 @@ import (
 )
 
 type PageCmd struct {
-	List      PageListCmd      `cmd:"" help:"List pages in a space."`
-	Get       PageGetCmd       `cmd:"" help:"Get one or more pages."`
-	Children  PageChildrenCmd  `cmd:"" help:"List a page's direct children."`
-	Ancestors PageAncestorsCmd `cmd:"" help:"List a page's ancestors (root-most first)."`
-	Tree      PageTreeCmd      `cmd:"" help:"Print a space's page hierarchy (ordered by ID, not display order)."`
-	Create    PageCreateCmd    `cmd:"" help:"Create a page."`
-	Update    PageUpdateCmd    `cmd:"" help:"Update a page (optimistic concurrency)."`
-	Delete    PageDeleteCmd    `cmd:"" help:"Delete pages (moves to trash)."`
+	List        PageListCmd        `cmd:"" help:"List pages in a space."`
+	Get         PageGetCmd         `cmd:"" help:"Get one or more pages."`
+	Children    PageChildrenCmd    `cmd:"" help:"List a page's direct children."`
+	Descendants PageDescendantsCmd `cmd:"" help:"List all descendants of a page (every level)."`
+	Ancestors   PageAncestorsCmd   `cmd:"" help:"List a page's ancestors (root-most first)."`
+	Tree        PageTreeCmd        `cmd:"" help:"Print a space's page hierarchy (ordered by ID, not display order)."`
+	Create      PageCreateCmd      `cmd:"" help:"Create a page."`
+	Update      PageUpdateCmd      `cmd:"" help:"Update a page (optimistic concurrency)."`
+	Delete      PageDeleteCmd      `cmd:"" help:"Delete pages (moves to trash)."`
 }
 
 // resolvePageRef derives the site hint and page id from a single ref, which is
@@ -202,6 +203,67 @@ func (c *PageChildrenCmd) Run(cli *CLI) error {
 				"id":    pg.ID,
 				"title": pg.Title,
 				"type":  pg.Type,
+			}
+			if err := p.PrintItem(row); err != nil {
+				return err
+			}
+		}
+
+		if !c.All {
+			break
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+
+	if c.All {
+		return p.PrintMeta(output.Meta{})
+	}
+	return p.PrintMeta(output.Meta{HasMore: next != "", NextCursor: next})
+}
+
+type PageDescendantsCmd struct {
+	Ref    string `arg:"" name:"id-or-url" help:"Page ID or URL."`
+	Limit  int    `default:"25" help:"Page size requested from the API."`
+	Cursor string `help:"Opaque pagination cursor from a prior _meta.next_cursor."`
+	All    bool   `help:"Fetch every page (loop until the cursor is exhausted)."`
+}
+
+func (c *PageDescendantsCmd) Run(cli *CLI) error {
+	siteHint, pageID, err := resolvePageRef(cli, c.Ref)
+	if err != nil {
+		return err
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	p := cli.NewPrinter()
+	cursor := c.Cursor
+	var next string
+	for {
+		descs, n, err := client.GetDescendants(ctx, pageID, cursor, c.Limit)
+		if err != nil {
+			return cli.ClassifyError(err)
+		}
+		next = n
+
+		for _, d := range descs {
+			row := map[string]any{
+				"id":    d.ID,
+				"title": d.Title,
+				"type":  d.Type,
+				"depth": d.Depth,
+			}
+			if d.ParentID != "" {
+				row["parent_id"] = d.ParentID
 			}
 			if err := p.PrintItem(row); err != nil {
 				return err

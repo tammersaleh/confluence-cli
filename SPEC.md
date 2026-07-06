@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
 
 ## Design principles
 
@@ -91,7 +91,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### Body input for writes
 
@@ -281,6 +281,27 @@ Each row carries `id`, `title`, and `type`.
 $ confluence page children 123400
 {"id":"123456","title":"API Design","type":"page"}
 {"id":"123457","title":"Database Schema","type":"page"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### page descendants
+
+```text
+confluence page descendants <id|url> [--limit <n>] [--cursor <c>] [--all]
+```
+
+List every descendant of a page (all levels below it, not just direct children). The argument is a numeric page id or a page URL; a URL selects the site. One object per descendant, then the trailer.
+
+- `--limit` - page size requested from the API (default 25).
+- `--cursor` - opaque cursor from a prior `_meta.next_cursor`, to fetch the next page.
+- `--all` - loop until the cursor is exhausted, emitting every descendant. The trailer omits `next_cursor` since nothing remains.
+
+Each row carries `id`, `title`, `type`, and `depth` (1 for a direct child); `parent_id` appears when the API returns it.
+
+```jsonl
+$ confluence page descendants 123400
+{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400"}
+{"id":"123999","title":"Auth flow","type":"page","depth":2,"parent_id":"123456"}
 {"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
 ```
 

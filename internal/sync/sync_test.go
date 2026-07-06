@@ -82,6 +82,10 @@ func (m *mockClient) ListChildren(ctx context.Context, pageID, cursor string, li
 	return nil, "", nil
 }
 
+func (m *mockClient) GetDescendants(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Descendant, string, error) {
+	return nil, "", nil
+}
+
 func (m *mockClient) GetAncestors(ctx context.Context, pageID string) ([]confluence.Page, error) {
 	return nil, nil
 }

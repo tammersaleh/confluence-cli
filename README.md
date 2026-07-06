@@ -5,7 +5,7 @@ module are `confluence-cli`. Output is JSONL (one JSON object per line);
 commands are non-interactive and scriptable, built for LLM agents and CI.
 
 The read and write surface ships today: `version`, `space sync`, `space info`,
-`space list`, `auth`, `page list`, `page get`, `page children`, `page ancestors`,
+`space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
 `page tree`, `page create`, `page update`, `page delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
@@ -206,6 +206,24 @@ confluence page children 123400 --all
 
 ```jsonl
 {"id":"123456","title":"API Design","type":"page"}
+{"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### page descendants
+
+List every descendant of a page (all levels, not just direct children). The
+argument is a numeric page id or a page URL. Page through with `--limit`/`--cursor`,
+or fetch everything with `--all`. Rows carry `id`, `title`, `type`, and `depth`
+(1 for a direct child); `parent_id` appears when the API returns it.
+
+```bash
+confluence page descendants 123400
+confluence page descendants 123400 --all
+```
+
+```jsonl
+{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400"}
+{"id":"123999","title":"Auth flow","type":"page","depth":2,"parent_id":"123456"}
 {"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
 ```
 

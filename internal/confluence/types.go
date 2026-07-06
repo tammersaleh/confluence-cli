@@ -60,6 +60,17 @@ type Page struct {
 	Type       string // "page", "database", "folder"
 }
 
+// Descendant is one node under a page in the descendants crawl. Unlike
+// ListChildren (direct children only), the descendants endpoint returns every
+// level below the page and carries depth (1 for direct children) and parentId.
+type Descendant struct {
+	ID       string
+	Title    string
+	Type     string // "page", "database", "folder"
+	ParentID string
+	Depth    int
+}
+
 type PageContent struct {
 	ID         string
 	Title      string
@@ -198,6 +209,7 @@ type Client interface {
 	GetPages(ctx context.Context, spaceID string) ([]Page, error)
 	ListPages(ctx context.Context, spaceID, cursor string, limit int) (pages []Page, nextCursor string, err error)
 	ListChildren(ctx context.Context, pageID, cursor string, limit int) (pages []Page, nextCursor string, err error)
+	GetDescendants(ctx context.Context, pageID, cursor string, limit int) (descendants []Descendant, nextCursor string, err error)
 	GetAncestors(ctx context.Context, pageID string) ([]Page, error)
 	GetPageContent(ctx context.Context, pageID string) (*PageContent, error)
 	GetPage(ctx context.Context, pageID string, format APIBodyFormat) (*PageDetail, error)

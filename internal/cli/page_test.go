@@ -906,6 +906,159 @@ func TestPageChildren_NotFound(t *testing.T) {
 	}
 }
 
+// pageDescendantsServer serves /wiki/api/v2/pages/{id}/descendants. When the
+// request cursor is "C2" it returns the second (final) page; otherwise the
+// first page links to a second (cursor=C2). ids in notFound return 404.
+func pageDescendantsServer(t *testing.T, notFound map[string]bool) *httptest.Server {
+	t.Helper()
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/wiki/api/v2/pages/"
+		const suffix = "/descendants"
+		if !strings.HasPrefix(r.URL.Path, prefix) || !strings.HasSuffix(r.URL.Path, suffix) {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), suffix)
+		if notFound[id] {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.URL.Query().Get("cursor") == "C2" {
+			_, _ = w.Write([]byte(`{"results":[{"id":"11","title":"Grandchild","type":"page","parentId":"10","depth":2}],"_links":{"next":""}}`))
+			return
+		}
+		next := srv.URL + prefix + id + suffix + "?cursor=C2"
+		_, _ = w.Write([]byte(`{"results":[{"id":"10","title":"Child","type":"page","parentId":"1","depth":1}],"_links":{"next":"` + next + `"}}`))
+	}))
+	return srv
+}
+
+func TestPageDescendants_BareID(t *testing.T) {
+	clearCredEnv(t)
+	server := pageDescendantsServer(t, nil)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &PageDescendantsCmd{Ref: "1", Limit: 25}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 row + 1 meta, got %d: %q", len(lines), out.String())
+	}
+	row := lines[0]
+	if row["id"] != "10" || row["title"] != "Child" || row["type"] != "page" {
+		t.Errorf("row shape unexpected: %v", row)
+	}
+	if row["depth"] != float64(1) || row["parent_id"] != "1" {
+		t.Errorf("depth/parent_id unexpected: %v", row)
+	}
+	meta := lines[1]["_meta"].(map[string]any)
+	if meta["next_cursor"] != "C2" || meta["has_more"] != true {
+		t.Errorf("meta unexpected: %v", meta)
+	}
+}
+
+func TestPageDescendants_All(t *testing.T) {
+	clearCredEnv(t)
+	server := pageDescendantsServer(t, nil)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &PageDescendantsCmd{Ref: "1", Limit: 25, All: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 3 {
+		t.Fatalf("expected 2 rows + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["id"] != "10" || lines[1]["id"] != "11" {
+		t.Errorf("rows unexpected: %v, %v", lines[0], lines[1])
+	}
+	if lines[1]["depth"] != float64(2) {
+		t.Errorf("depth unexpected: %v", lines[1])
+	}
+	meta := lines[2]["_meta"].(map[string]any)
+	if meta["has_more"] != false {
+		t.Errorf("has_more = %v, want false", meta["has_more"])
+	}
+	if _, ok := meta["next_cursor"]; ok {
+		t.Errorf("next_cursor should be omitted in --all mode: %v", meta)
+	}
+}
+
+func TestPageDescendants_URLDerivesSite(t *testing.T) {
+	clearCredEnv(t)
+	server := pageDescendantsServer(t, nil)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &PageDescendantsCmd{Ref: server.URL + "/wiki/spaces/ENG/pages/1/Title", Limit: 25}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if lines[0]["id"] != "10" {
+		t.Errorf("row unexpected: %v", lines[0])
+	}
+}
+
+func TestPageDescendants_NotFound(t *testing.T) {
+	clearCredEnv(t)
+	server := pageDescendantsServer(t, map[string]bool{"404": true})
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &PageDescendantsCmd{Ref: "404", Limit: 25}
+	err := cmd.Run(c)
+
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Err != "page_not_found" {
+		t.Errorf("Err = %q, want page_not_found", oErr.Err)
+	}
+}
+
 // pageAncestorsServer serves /wiki/api/v2/pages/{id}/ancestors. ids in notFound
 // return 404; otherwise a fixed root-most-first chain.
 func pageAncestorsServer(t *testing.T, notFound map[string]bool) *httptest.Server {
