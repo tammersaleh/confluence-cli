@@ -166,10 +166,14 @@ site per invocation). Each row echoes its `input`.
 URLs and adds `source_body_format`. Bad ids or unreadable pages appear inline on
 stdout and bump `_meta.error_count`.
 
+`--resolve-authors` adds an `author_name` sibling next to `author_id`
+(best-effort; one cached user lookup per unique author).
+
 ```bash
 confluence page get 123456
 confluence page get 123456 789012 --body-format markdown
 confluence page get https://acme.atlassian.net/wiki/spaces/ENG/pages/123456 --body-format adf
+confluence page get 123456 --resolve-authors
 ```
 
 ```jsonl
@@ -298,11 +302,13 @@ missing page is a fatal `page_not_found`.
 
 `--replies` recursively drains each comment's reply thread, emitting replies
 after their parent with a `parent_id` pointing at the immediate parent.
+`--resolve-authors` adds an `author_name` sibling (best-effort, cached).
 
 ```bash
 confluence comment list 123456
 confluence comment list 123456 --inline
 confluence comment list 123456 --replies
+confluence comment list 123456 --resolve-authors
 ```
 
 ```jsonl

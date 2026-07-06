@@ -18,10 +18,11 @@ type CommentCmd struct {
 // inline comments; --footer or --inline narrow to a single kind. Each kind is
 // fully drained (comment counts per page are bounded), so no cursor is emitted.
 type CommentListCmd struct {
-	Page    string `arg:"" name:"id-or-url" help:"Page ID or URL."`
-	Footer  bool   `help:"Only footer comments."`
-	Inline  bool   `help:"Only inline comments."`
-	Replies bool   `help:"Also fetch replies (recursively), each with a parent_id linking to its parent."`
+	Page           string `arg:"" name:"id-or-url" help:"Page ID or URL."`
+	Footer         bool   `help:"Only footer comments."`
+	Inline         bool   `help:"Only inline comments."`
+	Replies        bool   `help:"Also fetch replies (recursively), each with a parent_id linking to its parent."`
+	ResolveAuthors bool   `name:"resolve-authors" help:"Resolve author_id to an author_name sibling (best-effort, one cached user lookup per unique author)."`
 }
 
 func (c *CommentListCmd) Run(cli *CLI) error {
@@ -42,6 +43,11 @@ func (c *CommentListCmd) Run(cli *CLI) error {
 	wantFooter := c.Footer || (!c.Footer && !c.Inline)
 	wantInline := c.Inline || (!c.Footer && !c.Inline)
 
+	var authors *authorResolver
+	if c.ResolveAuthors {
+		authors = newAuthorResolver(client)
+	}
+
 	p := cli.NewPrinter()
 
 	printComment := func(cm confluence.Comment, parentID string) error {
@@ -56,6 +62,7 @@ func (c *CommentListCmd) Run(cli *CLI) error {
 		if parentID != "" {
 			row["parent_id"] = parentID
 		}
+		authors.enrich(ctx, row, cm.AuthorID)
 		return p.PrintItem(row)
 	}
 

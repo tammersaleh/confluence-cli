@@ -170,6 +170,46 @@ func TestCommentList_Replies(t *testing.T) {
 	}
 }
 
+func TestCommentList_ResolveAuthors(t *testing.T) {
+	clearCredEnv(t)
+	userCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/wiki/rest/api/user":
+			userCalls++
+			_, _ = w.Write([]byte(`{"accountId":"u1","displayName":"Grace Hopper","email":"grace@example.com"}`))
+		case "/wiki/api/v2/pages/123/footer-comments":
+			_, _ = w.Write([]byte(`{"results":[{"id":"f1","body":{"storage":{"value":"<p>one</p>"}},"version":{"authorId":"u1","createdAt":"t1"},"_links":{"webui":"/w/f1"}}],"_links":{"next":""}}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &CommentListCmd{Page: "123", Footer: true, ResolveAuthors: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if lines[0]["author_name"] != "Grace Hopper" {
+		t.Errorf("author_name not resolved: %v", lines[0])
+	}
+	if userCalls != 1 {
+		t.Errorf("user lookups = %d, want 1", userCalls)
+	}
+}
+
 func TestCommentList_URLDerivesSite(t *testing.T) {
 	clearCredEnv(t)
 	server := commentServer(t)

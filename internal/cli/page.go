@@ -408,8 +408,9 @@ func (c *PageTreeCmd) Run(cli *CLI) error {
 }
 
 type PageGetCmd struct {
-	Refs       []string `arg:"" name:"id-or-url" help:"Page IDs or URLs (all on one site)."`
-	BodyFormat string   `default:"storage" help:"storage | atlas_doc_format (alias: adf) | view | markdown (alias: md, derived from storage)."`
+	Refs           []string `arg:"" name:"id-or-url" help:"Page IDs or URLs (all on one site)."`
+	BodyFormat     string   `default:"storage" help:"storage | atlas_doc_format (alias: adf) | view | markdown (alias: md, derived from storage)."`
+	ResolveAuthors bool     `name:"resolve-authors" help:"Resolve author_id to an author_name sibling (best-effort, one cached user lookup per unique author)."`
 }
 
 func (c *PageGetCmd) Run(cli *CLI) error {
@@ -484,6 +485,11 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 	ctx, cancel := cli.Context()
 	defer cancel()
 
+	var authors *authorResolver
+	if c.ResolveAuthors {
+		authors = newAuthorResolver(client)
+	}
+
 	p := cli.NewPrinter()
 	errCount := 0
 	for _, pr := range pairs {
@@ -539,6 +545,7 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 		default:
 			row["body"] = pd.Body
 		}
+		authors.enrich(ctx, row, pd.AuthorID)
 		if err := p.PrintItem(row); err != nil {
 			return err
 		}

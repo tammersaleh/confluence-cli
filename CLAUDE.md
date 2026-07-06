@@ -31,6 +31,7 @@ internal/
     comment.go                 `comment list` (footer + inline; --replies drains reply threads recursively with parent_id) + `comment add` (footer, or inline via --inline --selection-text with --match-index/--match-count).
     label.go                   `label list`, `label add`, `label remove`. Add/remove are per-label (independent, inline errors).
     user.go                    `user current` and `user info <accountId>...` commands.
+    authors.go                 authorResolver: per-invocation cached author_id -> author_name lookups for --resolve-authors (page get, comment list). Best-effort; nil resolver disables enrichment.
   output/
     output.go                  Printer (JSONL rows + _meta trailer), Meta, Error, ExitError, exit codes, field filtering.
     errors.go                  Error.AsItem for inline per-item errors.
@@ -127,7 +128,7 @@ The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `p
 - `confluence auth status` - list configured sites and any active env override, without printing secrets.
 - `confluence auth logout [<site>]` - remove stored credentials for a site. The `<site>` positional is optional when exactly one site is configured.
 - `confluence page list --space <key|url>` - list pages in a space. Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `space_key`, and `parent_id`/`parent_type` when present.
-- `confluence page get <id|url>...` - fetch pages by id or URL (one site per invocation). `--body-format storage|atlas_doc_format (adf)|view|markdown (md)`, default `storage`. ADF `body` is a nested object; `markdown` is derived from storage (attachments resolved to remote URLs) and adds `source_body_format`. Per-item errors go inline and bump `_meta.error_count`.
+- `confluence page get <id|url>...` - fetch pages by id or URL (one site per invocation). `--body-format storage|atlas_doc_format (adf)|view|markdown (md)`, default `storage`. ADF `body` is a nested object; `markdown` is derived from storage (attachments resolved to remote URLs) and adds `source_body_format`. `--resolve-authors` adds an `author_name` sibling (best-effort, cached user lookups). Per-item errors go inline and bump `_meta.error_count`.
 - `confluence page children <id|url>` - direct children of a page. Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`.
 - `confluence page descendants <id|url>` - all descendants of a page (every level). Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `depth` (1 for a direct child), and `parent_id` when present.
 - `confluence page ancestors <id|url>` - ancestor chain, root-most first. Not paginated. Rows carry `id`, `type` (the endpoint omits `title`).
@@ -139,7 +140,7 @@ The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `p
 - `confluence attachment download <id> [-o|--out <path>]` - download an attachment by id (not a URL) to a file; defaults to the attachment filename in the current dir. Emits `id`, `title`, `media_type`, `path`, `bytes`.
 - `confluence attachment upload <page id|url> <file>...` - upload files as attachments (per-file, inline errors). A filename collision creates a new version. Rows echo `input` and carry `page_id`, `attachment_id`, `title`, `media_type`, `uploaded:true`.
 - `confluence search <cql>` - CQL search. The CQL is the positional arg; site-wide (from `--site` or the single stored default). Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `space_key`, `excerpt`, `url`.
-- `confluence comment list <page id|url>` - a page's comments. Drains footer + inline (no cursor); `--footer`/`--inline` narrow to one kind. `--replies` recursively drains reply threads, emitting each reply after its parent with a `parent_id`. Rows carry `id`, `kind` (`footer`/`inline`), `body`, `author_id`, `created_at`, `web_url`. A missing page is a fatal `page_not_found`.
+- `confluence comment list <page id|url>` - a page's comments. Drains footer + inline (no cursor); `--footer`/`--inline` narrow to one kind. `--replies` recursively drains reply threads, emitting each reply after its parent with a `parent_id`. `--resolve-authors` adds an `author_name` sibling (best-effort, cached). Rows carry `id`, `kind` (`footer`/`inline`), `body`, `author_id`, `created_at`, `web_url`. A missing page is a fatal `page_not_found`.
 - `confluence comment add <page id|url> --body-format storage|adf|markdown` - add a comment; body on stdin (required). Footer by default; `--inline --selection-text <text> [--match-index N] [--match-count N]` anchors an inline comment to on-page text. Row: `id`, `page_id`, `kind` (`footer`/`inline`), `body_format`, `web_url`; inline rows also carry `selection_text`.
 - `confluence label list <page id|url>` - a page's labels, fully drained. Rows carry `id`, `name`, `prefix`.
 - `confluence label add <page id|url> <label>...` - add labels (per-label, inline errors). Rows carry `page_id`, `name`, `prefix`, `added:true`.

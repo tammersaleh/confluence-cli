@@ -179,10 +179,13 @@ row echoes its `input`. `--body-format` (default `storage`) also accepts
 `atlas_doc_format` (alias `adf`), `view`, and `markdown` (alias `md`). ADF `body`
 is a nested JSON object; `markdown` is derived from storage with attachment
 references resolved to remote URLs and adds `source_body_format`.
+`--resolve-authors` adds an `author_name` sibling (best-effort, cached user
+lookups).
 
 ```bash
 confluence page get 123456
 confluence page get 123456 --body-format markdown
+confluence page get 123456 --resolve-authors
 ```
 
 ```jsonl
@@ -389,11 +392,13 @@ page is a fatal `page_not_found`.
 
 `--replies` drains each comment's reply thread recursively and emits the replies
 after their parent, each with a `parent_id` pointing at its immediate parent.
+`--resolve-authors` adds an `author_name` sibling (best-effort, cached).
 
 ```bash
 confluence comment list 123456
 confluence comment list 123456 --inline
 confluence comment list 123456 --replies
+confluence comment list 123456 --resolve-authors
 ```
 
 ```jsonl

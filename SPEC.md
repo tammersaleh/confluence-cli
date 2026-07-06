@@ -234,10 +234,12 @@ $ confluence page list --space ENG
 ### page get
 
 ```text
-confluence page get <id|url>... [--body-format storage|atlas_doc_format|view|markdown]
+confluence page get <id|url>... [--body-format storage|atlas_doc_format|view|markdown] [--resolve-authors]
 ```
 
 Fetch one or more pages by numeric id or page URL. All arguments must resolve to a single site (one site per invocation); mixing sites is an error. Each row echoes the `input` that produced it.
+
+`--resolve-authors` adds an `author_name` sibling next to `author_id`, resolved via a best-effort user lookup (one cached call per unique author; a failed lookup omits `author_name` rather than failing the row).
 
 `--body-format` selects the body representation (default `storage`):
 
@@ -468,10 +470,12 @@ $ confluence search 'type = page AND text ~ "runbook"'
 ### comment list
 
 ```text
-confluence comment list <page id|url> [--footer] [--inline] [--replies]
+confluence comment list <page id|url> [--footer] [--inline] [--replies] [--resolve-authors]
 ```
 
 List a page's comments. The argument is a numeric page id or a page URL. Footer and inline comments are fully drained, so there is no cursor and the trailer never carries `next_cursor`. `--footer` and `--inline` narrow the output to one kind; without either, both are emitted. A missing page is a fatal `page_not_found`.
+
+`--resolve-authors` adds an `author_name` sibling next to `author_id`, resolved via a best-effort user lookup (one cached call per unique author; a failed lookup omits `author_name`).
 
 Each row carries `id`, `kind` (`footer` or `inline`), `body`, `author_id`, `created_at`, and `web_url`.
 

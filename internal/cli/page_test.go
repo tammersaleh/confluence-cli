@@ -423,6 +423,106 @@ func TestPageGet_MultipleBareIDs(t *testing.T) {
 	}
 }
 
+func TestPageGet_ResolveAuthors(t *testing.T) {
+	clearCredEnv(t)
+	userCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/wiki/rest/api/user":
+			userCalls++
+			if r.URL.Query().Get("accountId") != "user456" {
+				t.Errorf("unexpected accountId: %s", r.URL.Query().Get("accountId"))
+			}
+			_, _ = w.Write([]byte(`{"accountId":"user456","displayName":"Ada Lovelace","email":"ada@example.com"}`))
+		case strings.HasPrefix(r.URL.Path, "/wiki/api/v2/pages/"):
+			id := strings.TrimPrefix(r.URL.Path, "/wiki/api/v2/pages/")
+			_, _ = w.Write([]byte(`{
+				"id": "` + id + `",
+				"title": "Page ` + id + `",
+				"spaceId": "space1",
+				"authorId": "user456",
+				"createdAt": "2024-01-15T10:30:00.000Z",
+				"body": {"storage": {"value": "<p>Hi</p>"}},
+				"version": {"number": 1, "createdAt": "2024-06-20T14:45:00.000Z"},
+				"_links": {"webui": "/spaces/TEST/pages/` + id + `/Page"}
+			}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	// Two pages by the same author: author_name is emitted on both, but the user
+	// lookup is cached (one call, not two).
+	cmd := &PageGetCmd{Refs: []string{"100", "200"}, BodyFormat: "storage", ResolveAuthors: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if lines[0]["author_name"] != "Ada Lovelace" || lines[1]["author_name"] != "Ada Lovelace" {
+		t.Errorf("author_name not resolved: %v, %v", lines[0], lines[1])
+	}
+	if userCalls != 1 {
+		t.Errorf("user lookups = %d, want 1 (cached)", userCalls)
+	}
+}
+
+func TestPageGet_ResolveAuthorsBestEffort(t *testing.T) {
+	clearCredEnv(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/wiki/rest/api/user":
+			// The author lookup fails; the row must still be emitted, sans name.
+			w.WriteHeader(http.StatusNotFound)
+		case strings.HasPrefix(r.URL.Path, "/wiki/api/v2/pages/"):
+			id := strings.TrimPrefix(r.URL.Path, "/wiki/api/v2/pages/")
+			_, _ = w.Write([]byte(`{
+				"id": "` + id + `",
+				"title": "Page ` + id + `",
+				"spaceId": "space1",
+				"authorId": "ghost",
+				"createdAt": "2024-01-15T10:30:00.000Z",
+				"body": {"storage": {"value": "<p>Hi</p>"}},
+				"version": {"number": 1, "createdAt": "2024-06-20T14:45:00.000Z"},
+				"_links": {"webui": "/spaces/TEST/pages/` + id + `/Page"}
+			}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"100"}, BodyFormat: "storage", ResolveAuthors: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if lines[0]["id"] != "100" {
+		t.Fatalf("row missing: %v", lines[0])
+	}
+	if _, ok := lines[0]["author_name"]; ok {
+		t.Errorf("author_name should be absent on failed lookup: %v", lines[0])
+	}
+}
+
 func TestPageGet_URLDerivesSite(t *testing.T) {
 	clearCredEnv(t)
 	server := pageGetServer(t, nil)
