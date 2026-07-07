@@ -135,8 +135,8 @@ func TestSaveCredentialsAtomicOverwrite(t *testing.T) {
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
-		"CONFLUENCE_EMAIL", "ATLASSIAN_API_EMAIL",
-		"CONFLUENCE_API_TOKEN", "ATLASSIAN_API_KEY",
+		"CONFLUENCE_EMAIL", "ATLASSIAN_EMAIL",
+		"CONFLUENCE_API_TOKEN", "ATLASSIAN_TOKEN",
 		"CONFLUENCE_SITE", "ATLASSIAN_SITE",
 	} {
 		t.Setenv(k, "")
@@ -174,8 +174,8 @@ func TestResolveCredentialsPureEnv(t *testing.T) {
 
 func TestResolveCredentialsCompatAliases(t *testing.T) {
 	clearEnv(t)
-	t.Setenv("ATLASSIAN_API_EMAIL", "alias@example.com")
-	t.Setenv("ATLASSIAN_API_KEY", "alias-key")
+	t.Setenv("ATLASSIAN_EMAIL", "alias@example.com")
+	t.Setenv("ATLASSIAN_TOKEN", "alias-key")
 	t.Setenv("ATLASSIAN_SITE", "acme.atlassian.net")
 
 	path := filepath.Join(t.TempDir(), "none.json")
@@ -191,9 +191,9 @@ func TestResolveCredentialsCompatAliases(t *testing.T) {
 func TestResolveCredentialsPrimaryBeatsAlias(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("CONFLUENCE_EMAIL", "primary@example.com")
-	t.Setenv("ATLASSIAN_API_EMAIL", "alias@example.com")
+	t.Setenv("ATLASSIAN_EMAIL", "alias@example.com")
 	t.Setenv("CONFLUENCE_API_TOKEN", "primary-tok")
-	t.Setenv("ATLASSIAN_API_KEY", "alias-key")
+	t.Setenv("ATLASSIAN_TOKEN", "alias-key")
 	t.Setenv("CONFLUENCE_SITE", "primary.atlassian.net")
 	t.Setenv("ATLASSIAN_SITE", "alias.atlassian.net")
 

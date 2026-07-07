@@ -127,8 +127,8 @@ func SaveCredentials(path string, creds *Credentials) error {
 // with environment taking precedence field by field. The site argument, when
 // non-empty, has already been resolved from any CLI flag by the caller.
 func ResolveCredentials(path string, site string) (*ResolvedCredentials, error) {
-	envEmail := firstNonEmpty(os.Getenv("CONFLUENCE_EMAIL"), os.Getenv("ATLASSIAN_API_EMAIL"))
-	envToken := firstNonEmpty(os.Getenv("CONFLUENCE_API_TOKEN"), os.Getenv("ATLASSIAN_API_KEY"))
+	envEmail := firstNonEmpty(os.Getenv("CONFLUENCE_EMAIL"), os.Getenv("ATLASSIAN_EMAIL"))
+	envToken := firstNonEmpty(os.Getenv("CONFLUENCE_API_TOKEN"), os.Getenv("ATLASSIAN_TOKEN"))
 	envSite := firstNonEmpty(os.Getenv("CONFLUENCE_SITE"), os.Getenv("ATLASSIAN_SITE"))
 
 	// Effective site: explicit arg wins, else the env-provided site.

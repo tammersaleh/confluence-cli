@@ -84,7 +84,7 @@ Precedence, highest first:
 
 1. Flags (`--site`, and the credential set via `auth login`).
 2. `CONFLUENCE_SITE` / `CONFLUENCE_EMAIL` / `CONFLUENCE_API_TOKEN`.
-3. `ATLASSIAN_SITE` / `ATLASSIAN_API_EMAIL` / `ATLASSIAN_API_KEY` (compatibility aliases).
+3. `ATLASSIAN_SITE` / `ATLASSIAN_EMAIL` / `ATLASSIAN_TOKEN` (compatibility aliases).
 4. Stored credentials.
 
 Site selection derives the target from a URL argument when the command takes one; else `--site`; else the single configured default. A URL-derived site that disagrees with an explicit `--site` is an error.

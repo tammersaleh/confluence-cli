@@ -156,8 +156,8 @@ type AuthStatusCmd struct{}
 func (c *AuthStatusCmd) Run(cli *CLI) error {
 	p := cli.NewPrinter()
 
-	envEmail := envGet("CONFLUENCE_EMAIL", "ATLASSIAN_API_EMAIL")
-	envToken := envGet("CONFLUENCE_API_TOKEN", "ATLASSIAN_API_KEY")
+	envEmail := envGet("CONFLUENCE_EMAIL", "ATLASSIAN_EMAIL")
+	envToken := envGet("CONFLUENCE_API_TOKEN", "ATLASSIAN_TOKEN")
 	envSite := envGet("CONFLUENCE_SITE", "ATLASSIAN_SITE")
 
 	path, err := cli.credentialsFilePath()
@@ -303,8 +303,8 @@ func (c *AuthLogoutCmd) Run(cli *CLI) error {
 // envActiveForSite reports whether env vars still provide usable credentials for
 // site: both email and token set, and the env site (if any) canonicalizes to it.
 func envActiveForSite(site string) bool {
-	if envGet("CONFLUENCE_EMAIL", "ATLASSIAN_API_EMAIL") == "" ||
-		envGet("CONFLUENCE_API_TOKEN", "ATLASSIAN_API_KEY") == "" {
+	if envGet("CONFLUENCE_EMAIL", "ATLASSIAN_EMAIL") == "" ||
+		envGet("CONFLUENCE_API_TOKEN", "ATLASSIAN_TOKEN") == "" {
 		return false
 	}
 	envSite := envGet("CONFLUENCE_SITE", "ATLASSIAN_SITE")

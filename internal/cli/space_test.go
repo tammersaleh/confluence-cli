@@ -17,8 +17,8 @@ import (
 func clearCredEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
-		"CONFLUENCE_EMAIL", "ATLASSIAN_API_EMAIL",
-		"CONFLUENCE_API_TOKEN", "ATLASSIAN_API_KEY",
+		"CONFLUENCE_EMAIL", "ATLASSIAN_EMAIL",
+		"CONFLUENCE_API_TOKEN", "ATLASSIAN_TOKEN",
 		"CONFLUENCE_SITE", "ATLASSIAN_SITE",
 	} {
 		t.Setenv(k, "")

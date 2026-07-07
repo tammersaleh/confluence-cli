@@ -169,7 +169,7 @@ canonical site base URL. Precedence, highest first:
 
 1. Flags (`--site`, and the credential set via `auth login`).
 2. `CONFLUENCE_SITE` / `CONFLUENCE_EMAIL` / `CONFLUENCE_API_TOKEN`.
-3. `ATLASSIAN_SITE` / `ATLASSIAN_API_EMAIL` / `ATLASSIAN_API_KEY` (compat aliases).
+3. `ATLASSIAN_SITE` / `ATLASSIAN_EMAIL` / `ATLASSIAN_TOKEN` (compat aliases).
 4. Stored credentials.
 
 Site selection derives the target from a URL argument when present; else

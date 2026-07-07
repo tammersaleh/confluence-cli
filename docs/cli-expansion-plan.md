@@ -103,8 +103,8 @@ lifecycle is too heavy for v1.
 - `confluence auth login --site <url> --email <e>` (token via prompt/stdin, not
   argv), `auth status`, `auth logout`.
 - Env precedence: flags > `CONFLUENCE_SITE`/`CONFLUENCE_EMAIL`/
-  `CONFLUENCE_API_TOKEN` > `ATLASSIAN_SITE`/`ATLASSIAN_API_EMAIL`/
-  `ATLASSIAN_API_KEY` (compat aliases) > stored credentials.
+  `CONFLUENCE_API_TOKEN` > `ATLASSIAN_SITE`/`ATLASSIAN_EMAIL`/
+  `ATLASSIAN_TOKEN` (compat aliases) > stored credentials.
 - Site selection: derive site from a URL argument when present; else `--site`
   or the single configured default; error if a URL-derived site disagrees with
   `--site`.

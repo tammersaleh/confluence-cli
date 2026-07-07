@@ -36,7 +36,7 @@ Authenticate with an API token + email over environment variables:
 - `CONFLUENCE_EMAIL` - Atlassian account email.
 - `CONFLUENCE_API_TOKEN` - API token.
 
-`ATLASSIAN_SITE` / `ATLASSIAN_API_EMAIL` / `ATLASSIAN_API_KEY` work as
+`ATLASSIAN_SITE` / `ATLASSIAN_EMAIL` / `ATLASSIAN_TOKEN` work as
 compatibility aliases. Or store credentials with `confluence auth login` (see
 below); the token is piped on stdin, validated, then saved.
 
