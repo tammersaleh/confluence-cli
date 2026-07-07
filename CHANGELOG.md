@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/tammersaleh/confluence-cli/compare/v1.10.0...v2.0.0) (2026-07-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* ATLASSIAN_API_EMAIL and ATLASSIAN_API_KEY are no longer recognized. Use ATLASSIAN_EMAIL and ATLASSIAN_TOKEN (or the CONFLUENCE_* names) instead.
+
+### Features
+
+* rename Atlassian env aliases to ATLASSIAN_EMAIL/ATLASSIAN_TOKEN ([48069b3](https://github.com/tammersaleh/confluence-cli/commit/48069b3f853aa7f0634117f18d33cee8c52333c3))
+
 ## [1.10.0](https://github.com/tammersaleh/confluence-cli/compare/v1.9.0...v1.10.0) (2026-07-06)
 
 
