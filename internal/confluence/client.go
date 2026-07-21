@@ -1668,7 +1668,14 @@ func (c *client) ConvertPageToLive(ctx context.Context, pageID string) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	return parseConvertToLiveResponse(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		// A transport failure while reading the 200 body (context
+		// cancel/timeout, reset) keeps its own classification; it is not a
+		// logical conversion failure.
+		return err
+	}
+	return parseConvertToLiveResponse(body)
 }
 
 // graphQLError is one entry in a GraphQL "errors" array (top-level or nested).
@@ -1682,7 +1689,7 @@ type graphQLError struct {
 // explicitly true, and the action reported no errors. Anything else (missing
 // fields, contradictory success+errors, malformed body) is a failure. Nested
 // pointers distinguish "absent" from a zero value.
-func parseConvertToLiveResponse(r io.Reader) error {
+func parseConvertToLiveResponse(body []byte) error {
 	var env struct {
 		Data *struct {
 			Result *struct {
@@ -1692,7 +1699,9 @@ func parseConvertToLiveResponse(r io.Reader) error {
 		} `json:"data"`
 		Errors []graphQLError `json:"errors"`
 	}
-	if err := json.NewDecoder(r).Decode(&env); err != nil {
+	// json.Unmarshal (unlike Decoder.Decode) rejects trailing content after the
+	// first JSON value, so a success envelope followed by junk fails closed.
+	if err := json.Unmarshal(body, &env); err != nil {
 		return fmt.Errorf("%w: could not decode live conversion response", ErrLiveConvertFailed)
 	}
 

@@ -15,12 +15,12 @@ import (
 )
 
 type PageCmd struct {
-	List        PageListCmd        `cmd:"" help:"List pages in a space."`
-	Get         PageGetCmd         `cmd:"" help:"Get one or more pages."`
-	Children    PageChildrenCmd    `cmd:"" help:"List a page's direct children."`
-	Descendants PageDescendantsCmd `cmd:"" help:"List all descendants of a page (every level)."`
-	Ancestors   PageAncestorsCmd   `cmd:"" help:"List a page's ancestors (root-most first)."`
-	Tree        PageTreeCmd        `cmd:"" help:"Print a space's page hierarchy (ordered by ID, not display order)."`
+	List          PageListCmd          `cmd:"" help:"List pages in a space."`
+	Get           PageGetCmd           `cmd:"" help:"Get one or more pages."`
+	Children      PageChildrenCmd      `cmd:"" help:"List a page's direct children."`
+	Descendants   PageDescendantsCmd   `cmd:"" help:"List all descendants of a page (every level)."`
+	Ancestors     PageAncestorsCmd     `cmd:"" help:"List a page's ancestors (root-most first)."`
+	Tree          PageTreeCmd          `cmd:"" help:"Print a space's page hierarchy (ordered by ID, not display order)."`
 	Create        PageCreateCmd        `cmd:"" help:"Create a page."`
 	Update        PageUpdateCmd        `cmd:"" help:"Update a page (optimistic concurrency)."`
 	Delete        PageDeleteCmd        `cmd:"" help:"Delete pages (moves to trash)."`

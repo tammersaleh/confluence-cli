@@ -2266,6 +2266,7 @@ func TestClient_ConvertPageToLive_LogicalFailures(t *testing.T) {
 		{"missing success", `{"data":{"convertPageToLiveEditAction":{"errors":null}}}`, "success"},
 		{"malformed json", `<html>login</html>`, "decode"},
 		{"empty body", ``, "decode"},
+		{"trailing junk after success", `{"data":{"convertPageToLiveEditAction":{"success":true,"errors":null}}}garbage`, "decode"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2295,6 +2296,27 @@ func TestClient_ConvertPageToLive_UnknownFieldsAccepted(t *testing.T) {
 	c := NewClient(server.URL, "test@example.com", "api-token")
 	if err := c.ConvertPageToLive(context.Background(), "1"); err != nil {
 		t.Errorf("unknown fields should be tolerated, got error: %v", err)
+	}
+}
+
+func TestClient_ConvertPageToLive_BodyReadErrorNotMasked(t *testing.T) {
+	// A truncated body (Content-Length promises more than is written) surfaces as
+	// a read error. It must not be masked as a logical ErrLiveConvertFailed, so
+	// that context-cancel/timeout/reset keep their own classification.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	err := c.ConvertPageToLive(context.Background(), "1")
+	if err == nil {
+		t.Fatal("expected an error from a truncated body")
+	}
+	if errors.Is(err, ErrLiveConvertFailed) {
+		t.Errorf("body-read error should not be ErrLiveConvertFailed, got %v", err)
 	}
 }
 

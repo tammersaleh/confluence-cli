@@ -242,6 +242,17 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Hint:   "Check the accountId. Find it via 'confluence user current' or a page's author_id.",
 			Code:   output.ExitGeneral,
 		}
+	case errors.Is(err, confluence.ErrNotFound):
+		// Generic 404 with no resource-specific sentinel. The only path that
+		// reaches here today is ConvertPageToLive, which deliberately leaves a
+		// /cgraphql 404 as the bare ErrNotFound (the endpoint may have moved
+		// rather than the page being missing). Keep a stable code.
+		oErr = &output.Error{
+			Err:    "not_found",
+			Detail: err.Error(),
+			Hint:   "The resource or endpoint was not found. For 'page convert-to-live', the undocumented endpoint may have moved or been disabled.",
+			Code:   output.ExitGeneral,
+		}
 	case errors.Is(err, confluence.ErrLiveConvertFailed):
 		oErr = &output.Error{
 			Err:    "live_convert_failed",

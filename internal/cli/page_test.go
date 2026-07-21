@@ -2052,6 +2052,27 @@ func TestPageConvertToLive_StatusErrorNotRemapped(t *testing.T) {
 	}
 }
 
+func TestPageConvertToLive_NotFoundStableCode(t *testing.T) {
+	clearCredEnv(t)
+	server := convertToLiveServer(t, nil, map[string]int{"1": http.StatusNotFound}, nil)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageConvertToLiveCmd{Refs: []string{"1"}}
+	if err := cmd.Run(c); !errors.As(err, new(*output.ExitError)) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	lines := parseLines(t, out.String())
+	// A 404 on the undocumented endpoint must classify as a stable code, not a
+	// freeform sentence, and must not become live_convert_failed.
+	if lines[0]["error"] != "not_found" {
+		t.Errorf("row error = %v, want not_found", lines[0]["error"])
+	}
+}
+
 func TestPageConvertToLive_MixedSiteRejected(t *testing.T) {
 	clearCredEnv(t)
 	setEnvCreds(t, "https://acme.atlassian.net")
