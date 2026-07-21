@@ -516,6 +516,9 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 			"web_url":     pd.WebURL,
 			"body_format": string(pd.BodyFormat),
 		}
+		if pd.Subtype != "" {
+			row["subtype"] = pd.Subtype
+		}
 		switch {
 		case derivedMarkdown:
 			// markdown is derived from the storage body. We need the page's

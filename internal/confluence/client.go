@@ -1210,6 +1210,7 @@ type pageDetailResponse struct {
 	SpaceID   string `json:"spaceId"`
 	AuthorID  string `json:"authorId"`
 	CreatedAt string `json:"createdAt"`
+	Subtype   string `json:"subtype"`
 	Body      struct {
 		Storage struct {
 			Value string `json:"value"`
@@ -1283,6 +1284,7 @@ func (c *client) GetPage(ctx context.Context, pageID string, format APIBodyForma
 		WebURL:     webURL,
 		Body:       body,
 		BodyFormat: format,
+		Subtype:    result.Subtype,
 	}, nil
 }
 

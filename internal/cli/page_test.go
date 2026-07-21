@@ -283,12 +283,18 @@ func pageGetServer(t *testing.T, notFound map[string]bool) *httptest.Server {
 			body = `"body": {"storage": {"value": "<p>Hello</p>"}}`
 		}
 
+		subtype := ""
+		if id == "live1" {
+			subtype = `"subtype": "live",`
+		}
+
 		_, _ = w.Write([]byte(`{
 			"id": "` + id + `",
 			"title": "Page ` + id + `",
 			"spaceId": "space1",
 			"authorId": "user456",
 			"createdAt": "2024-01-15T10:30:00.000Z",
+			` + subtype + `
 			` + body + `,
 			"version": {"number": 5, "createdAt": "2024-06-20T14:45:00.000Z"},
 			"_links": {"webui": "/spaces/TEST/pages/` + id + `/Page"}
@@ -337,6 +343,29 @@ func TestPageGet_Storage(t *testing.T) {
 	}
 	if row["title"] != "Page 123" || row["version"] != float64(5) || row["web_url"] == "" {
 		t.Errorf("row missing title/version/web_url: %v", row)
+	}
+}
+
+func TestPageGet_Subtype(t *testing.T) {
+	clearCredEnv(t)
+	server := pageGetServer(t, nil)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	// A live doc reports subtype; a regular page omits it entirely.
+	cmd := &PageGetCmd{Refs: []string{"live1", "123"}, BodyFormat: "storage"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	lines := parseLines(t, out.String())
+	if lines[0]["subtype"] != "live" {
+		t.Errorf("live1 subtype = %v, want live", lines[0]["subtype"])
+	}
+	if _, ok := lines[1]["subtype"]; ok {
+		t.Errorf("regular page should omit subtype, got %v", lines[1]["subtype"])
 	}
 }
 

@@ -157,6 +157,7 @@ type PageDetail struct {
 	WebURL     string
 	Body       string
 	BodyFormat APIBodyFormat
+	Subtype    string // "live" for a live doc; empty for a regular page
 }
 
 // WriteBody is the body payload for a create/update. Representation is one of
