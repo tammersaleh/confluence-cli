@@ -138,6 +138,10 @@ const (
 	BodyFormatView     APIBodyFormat = "view"
 )
 
+// PageSubtypeLive is the page subtype for a Confluence "live doc". A regular
+// page has no subtype (the API returns it null/absent).
+const PageSubtypeLive = "live"
+
 // PageDetail is a single page fetched for `page get`. Body is the raw value the
 // API returned for the requested BodyFormat: XHTML for storage, HTML for view,
 // and a JSON-encoded ADF string for atlas_doc_format (the CLI decides how to
@@ -174,6 +178,7 @@ type PageRecord struct {
 	AuthorID  string
 	CreatedAt string
 	WebURL    string
+	Subtype   string // "live" for a live doc; empty for a regular page
 }
 
 // CreatePageParams are the inputs to CreatePage. Status defaults to "current"
@@ -184,6 +189,7 @@ type CreatePageParams struct {
 	ParentID string
 	Status   string
 	Body     *WriteBody
+	Subtype  string // "live" creates a live doc; empty creates a regular page
 }
 
 // UpdatePageParams are the inputs to UpdatePage. Version is the NEW version

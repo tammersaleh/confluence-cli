@@ -1350,12 +1350,14 @@ func newWriteCLI(t *testing.T, out, errBuf *bytes.Buffer, stdin string) *CLI {
 
 // capturedCreate records the decoded POST body of a create call.
 type capturedCreate struct {
-	spaceID  string
-	title    string
-	parentID string
-	hasBody  bool
-	bodyRep  string
-	bodyVal  string
+	spaceID    string
+	title      string
+	parentID   string
+	subtype    string
+	subtypeSet bool
+	hasBody    bool
+	bodyRep    string
+	bodyVal    string
 }
 
 // pageCreateServer serves the space lookup and POST /pages, capturing the body.
@@ -1373,6 +1375,7 @@ func pageCreateServer(t *testing.T, cap *capturedCreate) *httptest.Server {
 			cap.spaceID, _ = payload["spaceId"].(string)
 			cap.title, _ = payload["title"].(string)
 			cap.parentID, _ = payload["parentId"].(string)
+			cap.subtype, cap.subtypeSet = payload["subtype"].(string)
 			if b, ok := payload["body"].(map[string]any); ok {
 				cap.hasBody = true
 				cap.bodyRep, _ = b["representation"].(string)
@@ -1389,6 +1392,11 @@ func pageCreateServer(t *testing.T, cap *capturedCreate) *httptest.Server {
 			}
 			if cap.parentID != "" {
 				resp["parentId"] = cap.parentID
+			}
+			// Echo the subtype the client sent, mimicking Confluence's response
+			// for a live-doc create.
+			if cap.subtype != "" {
+				resp["subtype"] = cap.subtype
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		default:
@@ -1426,6 +1434,52 @@ func TestPageCreate_StorageBody(t *testing.T) {
 	}
 	if _, ok := row["body"]; ok {
 		t.Errorf("row should not echo body: %v", row)
+	}
+}
+
+func TestPageCreate_Live(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedCreate
+	server := pageCreateServer(t, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "<p>Hi</p>")
+
+	cmd := &PageCreateCmd{Space: "ENG", Title: "Live Page", BodyFormat: "storage", Live: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if cap.subtype != "live" {
+		t.Errorf("subtype sent = %q, want live", cap.subtype)
+	}
+	row := parseLines(t, out.String())[0]
+	if row["subtype"] != "live" {
+		t.Errorf("row subtype = %v, want live", row["subtype"])
+	}
+}
+
+func TestPageCreate_NotLiveOmitsSubtype(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedCreate
+	server := pageCreateServer(t, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "<p>Hi</p>")
+
+	cmd := &PageCreateCmd{Space: "ENG", Title: "Plain", BodyFormat: "storage"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if cap.subtypeSet {
+		t.Errorf("subtype should be omitted from request when not --live, got %q", cap.subtype)
+	}
+	row := parseLines(t, out.String())[0]
+	if _, ok := row["subtype"]; ok {
+		t.Errorf("row should omit subtype for a regular page, got %v", row["subtype"])
 	}
 }
 

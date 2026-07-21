@@ -1501,6 +1501,7 @@ type pageRecordResponse struct {
 	ParentID  string `json:"parentId"`
 	AuthorID  string `json:"authorId"`
 	CreatedAt string `json:"createdAt"`
+	Subtype   string `json:"subtype"`
 	Version   struct {
 		Number int `json:"number"`
 	} `json:"version"`
@@ -1519,6 +1520,7 @@ func (r pageRecordResponse) toRecord(c *client) *PageRecord {
 		AuthorID:  r.AuthorID,
 		CreatedAt: r.CreatedAt,
 		WebURL:    c.absWebURL(r.Links.WebUI),
+		Subtype:   r.Subtype,
 	}
 }
 
@@ -1541,6 +1543,9 @@ func (c *client) CreatePage(ctx context.Context, p CreatePageParams) (*PageRecor
 	}
 	if p.ParentID != "" {
 		payload["parentId"] = p.ParentID
+	}
+	if p.Subtype != "" {
+		payload["subtype"] = p.Subtype
 	}
 	if p.Body != nil {
 		payload["body"] = bodyPayload{

@@ -655,6 +655,7 @@ type PageCreateCmd struct {
 	Title      string `required:"" help:"Page title."`
 	Parent     string `help:"Parent page ID or URL."`
 	BodyFormat string `help:"storage, adf, or markdown (required when piping a body)."`
+	Live       bool   `help:"Create a live doc (subtype=live) instead of a regular page."`
 }
 
 func (c *PageCreateCmd) Run(cli *CLI) error {
@@ -701,11 +702,17 @@ func (c *PageCreateCmd) Run(cli *CLI) error {
 		return cli.ClassifyError(err)
 	}
 
+	subtype := ""
+	if c.Live {
+		subtype = confluence.PageSubtypeLive
+	}
+
 	rec, err := client.CreatePage(ctx, confluence.CreatePageParams{
 		SpaceID:  space.ID,
 		Title:    c.Title,
 		ParentID: parentID,
 		Body:     body,
+		Subtype:  subtype,
 	})
 	if err != nil {
 		return cli.ClassifyError(err)
@@ -723,6 +730,11 @@ func (c *PageCreateCmd) Run(cli *CLI) error {
 	}
 	if rec.ParentID != "" {
 		row["parent_id"] = rec.ParentID
+	}
+	// Subtype comes from the server response, not the --live flag: only report
+	// "live" when Confluence confirmed it.
+	if rec.Subtype != "" {
+		row["subtype"] = rec.Subtype
 	}
 	if err := p.PrintItem(row); err != nil {
 		return err

@@ -2157,6 +2157,48 @@ func TestClient_CreatePage(t *testing.T) {
 	}
 }
 
+func TestClient_CreatePage_Subtype(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{"id":"1","title":"L","subtype":"live","version":{"number":1}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	rec, err := c.CreatePage(context.Background(), CreatePageParams{SpaceID: "s1", Title: "L", Subtype: PageSubtypeLive})
+	if err != nil {
+		t.Fatalf("CreatePage() error: %v", err)
+	}
+	if gotBody["subtype"] != "live" {
+		t.Errorf("subtype sent = %v, want live", gotBody["subtype"])
+	}
+	if rec.Subtype != "live" {
+		t.Errorf("rec.Subtype = %q, want live", rec.Subtype)
+	}
+}
+
+func TestClient_CreatePage_SubtypeOmittedWhenEmpty(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{"id":"1","title":"T","version":{"number":1}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	rec, err := c.CreatePage(context.Background(), CreatePageParams{SpaceID: "s1", Title: "T"})
+	if err != nil {
+		t.Fatalf("CreatePage() error: %v", err)
+	}
+	if _, ok := gotBody["subtype"]; ok {
+		t.Errorf("subtype should be omitted when empty, got %v", gotBody["subtype"])
+	}
+	if rec.Subtype != "" {
+		t.Errorf("rec.Subtype = %q, want empty", rec.Subtype)
+	}
+}
+
 func TestClient_CreatePage_NoParentNoBody(t *testing.T) {
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
