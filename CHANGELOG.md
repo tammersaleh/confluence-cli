@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.0](https://github.com/tammersaleh/confluence-cli/compare/v2.0.0...v2.1.0) (2026-07-21)
+
+
+### Features
+
+* **confluence:** add live conversion client ([ae615ec](https://github.com/tammersaleh/confluence-cli/commit/ae615ec643050b28670999c98d73aeb9cceeaf96))
+* **page:** add convert-to-live command ([846f6f3](https://github.com/tammersaleh/confluence-cli/commit/846f6f3123d32c862de4229e569db3c57ff5d9cf))
+* **page:** expose page subtype in reads ([7078365](https://github.com/tammersaleh/confluence-cli/commit/70783650b2b50017de7ccaba62ace31c0d523962))
+* **page:** support creating live pages ([ab0454d](https://github.com/tammersaleh/confluence-cli/commit/ab0454d1e2118b9faf62af907fd72590e102b2d9))
+
+
+### Bug Fixes
+
+* **page:** harden live-conversion response and 404 handling ([f8d0fba](https://github.com/tammersaleh/confluence-cli/commit/f8d0fba59caf789f9cc24eb399ef7817fa725429))
+
 ## [2.0.0](https://github.com/tammersaleh/confluence-cli/compare/v1.10.0...v2.0.0) (2026-07-07)
 
 
