@@ -1916,3 +1916,162 @@ func TestPageDelete_PerItem404(t *testing.T) {
 		t.Errorf("error_count = %v, want 1", meta["error_count"])
 	}
 }
+
+// convertToLiveServer serves POST /cgraphql. Any contentId in failIDs returns a
+// GraphQL logical failure; a status in statusFor overrides with that HTTP code.
+func convertToLiveServer(t *testing.T, failIDs map[string]bool, statusFor map[string]int, converted *[]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cgraphql" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		vars, _ := body["variables"].(map[string]any)
+		input, _ := vars["input"].(map[string]any)
+		id, _ := input["contentId"].(string)
+
+		if code, ok := statusFor[id]; ok {
+			w.WriteHeader(code)
+			return
+		}
+		if failIDs[id] {
+			w.Write([]byte(`{"data":{"convertPageToLiveEditAction":{"success":false,"errors":[{"message":"cannot convert"}]}}}`))
+			return
+		}
+		if converted != nil {
+			*converted = append(*converted, id)
+		}
+		w.Write([]byte(`{"data":{"convertPageToLiveEditAction":{"success":true,"errors":null}}}`))
+	}))
+}
+
+func TestPageConvertToLive_Success(t *testing.T) {
+	clearCredEnv(t)
+	var converted []string
+	server := convertToLiveServer(t, nil, nil, &converted)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageConvertToLiveCmd{Refs: []string{"1", "2"}}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if len(converted) != 2 {
+		t.Errorf("expected 2 conversions, got %v", converted)
+	}
+	lines := parseLines(t, out.String())
+	if len(lines) != 3 {
+		t.Fatalf("expected 2 rows + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["converted"] != true || lines[0]["id"] != "1" || lines[0]["input"] != "1" {
+		t.Errorf("first row unexpected: %v", lines[0])
+	}
+	if _, ok := lines[0]["subtype"]; ok {
+		t.Errorf("convert row should not carry subtype: %v", lines[0])
+	}
+	if !strings.Contains(errBuf.String(), "undocumented") {
+		t.Errorf("expected an undocumented-endpoint warning on stderr, got %q", errBuf.String())
+	}
+	if strings.Count(errBuf.String(), "warning:") != 1 {
+		t.Errorf("expected exactly one warning, got %q", errBuf.String())
+	}
+}
+
+func TestPageConvertToLive_QuietSuppressesWarning(t *testing.T) {
+	clearCredEnv(t)
+	server := convertToLiveServer(t, nil, nil, nil)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+	c.Quiet = true
+
+	cmd := &PageConvertToLiveCmd{Refs: []string{"1"}}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if errBuf.String() != "" {
+		t.Errorf("--quiet should suppress the warning, got %q", errBuf.String())
+	}
+}
+
+func TestPageConvertToLive_InlineFailure(t *testing.T) {
+	clearCredEnv(t)
+	var converted []string
+	server := convertToLiveServer(t, map[string]bool{"bad": true}, nil, &converted)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageConvertToLiveCmd{Refs: []string{"1", "bad"}}
+	err := cmd.Run(c)
+
+	var exitErr *output.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	lines := parseLines(t, out.String())
+	if lines[0]["converted"] != true || lines[0]["id"] != "1" {
+		t.Errorf("first row should be success: %v", lines[0])
+	}
+	if lines[1]["error"] != "live_convert_failed" || lines[1]["input"] != "bad" {
+		t.Errorf("second row should be inline live_convert_failed: %v", lines[1])
+	}
+	meta := lines[2]["_meta"].(map[string]any)
+	if meta["error_count"] != float64(1) {
+		t.Errorf("error_count = %v, want 1", meta["error_count"])
+	}
+}
+
+func TestPageConvertToLive_StatusErrorNotRemapped(t *testing.T) {
+	clearCredEnv(t)
+	server := convertToLiveServer(t, nil, map[string]int{"1": http.StatusUnauthorized}, nil)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageConvertToLiveCmd{Refs: []string{"1"}}
+	err := cmd.Run(c)
+	if !errors.As(err, new(*output.ExitError)) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	lines := parseLines(t, out.String())
+	if lines[0]["error"] != "unauthorized" {
+		t.Errorf("row error = %v, want unauthorized", lines[0]["error"])
+	}
+}
+
+func TestPageConvertToLive_MixedSiteRejected(t *testing.T) {
+	clearCredEnv(t)
+	setEnvCreds(t, "https://acme.atlassian.net")
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageConvertToLiveCmd{Refs: []string{
+		"https://a.atlassian.net/wiki/spaces/ENG/pages/1",
+		"https://b.atlassian.net/wiki/spaces/ENG/pages/2",
+	}}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	if oErr.Err != "invalid_input" {
+		t.Errorf("Err = %q, want invalid_input", oErr.Err)
+	}
+	if out.String() != "" {
+		t.Errorf("no rows should be emitted on a site conflict, got %q", out.String())
+	}
+}

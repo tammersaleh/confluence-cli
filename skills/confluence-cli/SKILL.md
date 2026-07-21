@@ -13,7 +13,8 @@ command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 
 Both reads and writes ship today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
-`page tree`, `page create`, `page update`, `page delete`, `attachment list`,
+`page tree`, `page create`, `page update`, `page delete`, `page convert-to-live`,
+`attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
 `user info`. Read commands are below; writes are under "Writing content". The
@@ -167,7 +168,9 @@ URLs and adds `source_body_format`. Bad ids or unreadable pages appear inline on
 stdout and bump `_meta.error_count`.
 
 `--resolve-authors` adds an `author_name` sibling next to `author_id`
-(best-effort; one cached user lookup per unique author).
+(best-effort; one cached user lookup per unique author). A `subtype` field
+appears only for live docs (value `live`); use it to confirm a
+`page convert-to-live`.
 
 ```bash
 confluence page get 123456
@@ -407,13 +410,21 @@ printf '# Hello\n\nSome **bold** text.' | confluence page create --space ENG --t
 
 `--body-format` is required only when a non-empty body is piped. With no stdin
 (or empty input) the page is created empty and `--body-format` may be omitted.
-`--parent <id|url>` nests the page under an existing page on the same site. The
+`--parent <id|url>` nests the page under an existing page on the same site.
+`--live` creates a live doc (subtype `live`) instead of a regular page. The
 row carries `id`, `title`, `space_id`, `version`, `author_id`, `created_at`,
-`web_url` (and `parent_id` when nested); the body is not echoed.
+`web_url` (and `parent_id` when nested, `subtype` when the server returns one);
+the body is not echoed.
 
 ```jsonl
 {"id":"123456","title":"X","space_id":"98765","version":1,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
 {"_meta":{"has_more":false}}
+```
+
+Create a live doc by adding `--live`:
+
+```bash
+printf '<p>Hello</p>' | confluence page create --space ENG --title "Team Notes" --body-format storage --live
 ```
 
 ### Bodies that look right but fail
@@ -480,6 +491,35 @@ confluence page delete 123456 --yes
 {"input":"123456","id":"123456","deleted":true,"delete_mode":"trash"}
 {"_meta":{"has_more":false,"error_count":0}}
 ```
+
+### Converting a page to a live doc
+
+`page convert-to-live <id|url>...` converts existing pages to live docs. There is
+no public Confluence API for this. The command calls Confluence's undocumented
+internal `/cgraphql` endpoint, which is unsupported: it may change or be removed
+without notice, it is reportedly blocked from Atlassian's automation IP ranges
+(it works with API-token auth from a developer machine), and there is no
+supported API to convert back. A warning is written to stderr before the first
+conversion (suppress it with `--quiet`). All arguments must be on one site.
+
+Rows echo `input` and carry `id` and `converted:true`. `converted:true` means
+the mutation reported success; the command does not read the page back. Confirm
+the result with `page get` and check `subtype`. Per-item failures appear inline
+as `live_convert_failed` and bump `_meta.error_count`; 401/403/404 keep their
+normal codes.
+
+```bash
+confluence page convert-to-live 123456
+confluence page get 123456 --fields subtype   # verify: {"subtype":"live"}
+```
+
+```jsonl
+{"input":"123456","id":"123456","converted":true}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+To create a live doc from scratch, prefer `page create --live` (a supported REST
+call) over creating a page and converting it.
 
 ### Uploading attachments
 

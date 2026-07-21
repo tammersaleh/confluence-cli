@@ -6,7 +6,8 @@ commands are non-interactive and scriptable, built for LLM agents and CI.
 
 The read and write surface ships today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
-`page tree`, `page create`, `page update`, `page delete`, `attachment list`,
+`page tree`, `page create`, `page update`, `page delete`, `page convert-to-live`,
+`attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
 `user info`. The full command surface is implemented. See `SPEC.md` for the full
@@ -180,7 +181,7 @@ row echoes its `input`. `--body-format` (default `storage`) also accepts
 is a nested JSON object; `markdown` is derived from storage with attachment
 references resolved to remote URLs and adds `source_body_format`.
 `--resolve-authors` adds an `author_name` sibling (best-effort, cached user
-lookups).
+lookups). A `subtype` field appears only for live docs (value `live`).
 
 ```bash
 confluence page get 123456
@@ -271,12 +272,15 @@ confluence page tree --space ENG
 Create a page. `--space` takes a bare key or a space/page URL; `--parent` nests
 the page under an existing page on the same site. The body is read from stdin;
 `--body-format` is required only when a non-empty body is piped. With no stdin
-(or empty input), the page is created empty. The row carries `id`, `title`,
+(or empty input), the page is created empty. `--live` creates a live doc
+(subtype `live`) instead of a regular page. The row carries `id`, `title`,
 `space_id`, `version`, `author_id`, `created_at`, and `web_url`; `parent_id`
-appears when the page has a parent. The body is not echoed.
+appears when the page has a parent, and `subtype` appears when the server returns
+one. The body is not echoed.
 
 ```bash
 printf '<p>Hello</p>' | confluence page create --space ENG --title "API Design" --body-format storage
+printf '<p>Hello</p>' | confluence page create --space ENG --title "Team Notes" --body-format storage --live
 ```
 
 ```jsonl
@@ -316,6 +320,28 @@ confluence page delete 123456 --yes
 
 ```jsonl
 {"input":"123456","id":"123456","deleted":true,"delete_mode":"trash"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### page convert-to-live
+
+Convert existing pages to live docs. There is no public API for this; the command
+uses Confluence's undocumented internal `/cgraphql` endpoint. It is unsupported:
+Atlassian may change or remove it without notice, it is reported to be blocked
+from Atlassian's automation IP ranges (it works with API-token auth from a
+developer machine), and there is no supported API to convert back. A warning is
+written to stderr before the first conversion (suppressed by `--quiet`). All
+arguments must be on one site. Rows echo `input` and carry `id` and
+`converted:true`; `converted` means the mutation reported success, not a
+read-back, so verify with `confluence page get <id>` and check `subtype`.
+Per-item failures appear inline as `live_convert_failed`.
+
+```bash
+confluence page convert-to-live 123456
+```
+
+```jsonl
+{"input":"123456","id":"123456","converted":true}
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 

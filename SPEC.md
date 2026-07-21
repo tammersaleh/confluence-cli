@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `page convert-to-live`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
 
 ## Design principles
 
@@ -91,7 +91,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `page convert-to-live`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### Body input for writes
 
@@ -248,6 +248,8 @@ Fetch one or more pages by numeric id or page URL. All arguments must resolve to
 - `view` - rendered view HTML, as a string.
 - `markdown` (alias `md`) - derived by converting the storage body to GFM, with attachment references resolved to absolute remote URLs. Costs one extra API call per page to list attachments. Adds `source_body_format:"storage"` and sets `body_format:"markdown"`.
 
+A `subtype` field appears only when the page is a live doc (value `live`); regular pages omit it. Use this to tell live docs apart and to verify a `page convert-to-live`.
+
 Per-item errors (bad id, no permission) appear inline on stdout and bump `_meta.error_count`.
 
 ```jsonl
@@ -345,12 +347,12 @@ $ confluence page tree --space ENG
 ### page create
 
 ```text
-confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf|markdown] [< body]
+confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf|markdown] [--live] [< body]
 ```
 
-Create a page. `--space` takes a bare space key or a space/page URL; a URL selects the site. `--parent` nests the new page under an existing page (same site as the space). The body is read from stdin; `--body-format` is required only when a non-empty body is piped. With no stdin (or an empty/whitespace body), the page is created empty and `--body-format` may be omitted.
+Create a page. `--space` takes a bare space key or a space/page URL; a URL selects the site. `--parent` nests the new page under an existing page (same site as the space). The body is read from stdin; `--body-format` is required only when a non-empty body is piped. With no stdin (or an empty/whitespace body), the page is created empty and `--body-format` may be omitted. `--live` creates a live doc (subtype `live`) instead of a regular page.
 
-The row carries `id`, `title`, `space_id`, `version`, `author_id`, `created_at`, and `web_url`; `parent_id` appears when the page has a parent. The body is not echoed back.
+The row carries `id`, `title`, `space_id`, `version`, `author_id`, `created_at`, and `web_url`; `parent_id` appears when the page has a parent, and `subtype` appears when the server returns one (for example `live`). The body is not echoed back.
 
 ```jsonl
 $ printf '<p>Hello</p>' | confluence page create --space ENG --title "API Design" --body-format storage
@@ -401,6 +403,27 @@ $ confluence page delete 123456 --yes
 {"input":"123456","id":"123456","deleted":true,"delete_mode":"trash"}
 {"_meta":{"has_more":false,"error_count":0}}
 ```
+
+### page convert-to-live
+
+```text
+confluence page convert-to-live <id|url>...
+```
+
+Convert one or more existing pages to live docs. All arguments must resolve to a single site.
+
+There is no public Confluence API for this conversion. The command calls Confluence's undocumented internal `/cgraphql` endpoint (operation `convertPageToLiveEditAction`). This dependency is unsupported: Atlassian may change or remove it without notice, it is reported to be blocked from Atlassian's automation IP ranges (it works with API-token auth from a developer machine), and there is no supported API to convert a live doc back to a page. The command writes one warning to stderr before the first conversion; `--quiet` suppresses it.
+
+Each row echoes the `input` that produced it and carries `id` and `converted:true`. `converted:true` means the mutation reported success; the command does not read the page back, so it does not report `subtype`. Verify with `confluence page get <id>` and check the `subtype` field. Per-item failures appear inline as `live_convert_failed` and bump `_meta.error_count`; transport and non-2xx failures (401, 403, 404) keep their normal error codes.
+
+```jsonl
+$ confluence page convert-to-live 123456
+warning: convert-to-live uses an undocumented Atlassian endpoint and has no supported API undo; it may change or be blocked without notice.
+{"input":"123456","id":"123456","converted":true}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+(The warning line above is written to stderr, not stdout.)
 
 ### attachment list
 

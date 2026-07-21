@@ -242,6 +242,13 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Hint:   "Check the accountId. Find it via 'confluence user current' or a page's author_id.",
 			Code:   output.ExitGeneral,
 		}
+	case errors.Is(err, confluence.ErrLiveConvertFailed):
+		oErr = &output.Error{
+			Err:    "live_convert_failed",
+			Detail: err.Error(),
+			Hint:   "This uses an undocumented Atlassian endpoint that may change or be blocked; verify the page with 'confluence page get <id>' and check its subtype.",
+			Code:   output.ExitGeneral,
+		}
 	case errors.Is(err, confluence.ErrAPIError):
 		oErr = &output.Error{
 			Err:    "api_error",

@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -20,9 +21,10 @@ type PageCmd struct {
 	Descendants PageDescendantsCmd `cmd:"" help:"List all descendants of a page (every level)."`
 	Ancestors   PageAncestorsCmd   `cmd:"" help:"List a page's ancestors (root-most first)."`
 	Tree        PageTreeCmd        `cmd:"" help:"Print a space's page hierarchy (ordered by ID, not display order)."`
-	Create      PageCreateCmd      `cmd:"" help:"Create a page."`
-	Update      PageUpdateCmd      `cmd:"" help:"Update a page (optimistic concurrency)."`
-	Delete      PageDeleteCmd      `cmd:"" help:"Delete pages (moves to trash)."`
+	Create        PageCreateCmd        `cmd:"" help:"Create a page."`
+	Update        PageUpdateCmd        `cmd:"" help:"Update a page (optimistic concurrency)."`
+	Delete        PageDeleteCmd        `cmd:"" help:"Delete pages (moves to trash)."`
+	ConvertToLive PageConvertToLiveCmd `cmd:"" name:"convert-to-live" help:"Convert pages to live docs (undocumented endpoint; no supported undo)."`
 }
 
 // resolvePageRef derives the site hint and page id from a single ref, which is
@@ -944,6 +946,122 @@ func (c *PageDeleteCmd) Run(cli *CLI) error {
 			"id":          pr.pageID,
 			"deleted":     true,
 			"delete_mode": "trash",
+		}
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+	}
+
+	if err := p.PrintMeta(output.Meta{ErrorCount: errCount}); err != nil {
+		return err
+	}
+	if errCount > 0 {
+		return &output.ExitError{Code: output.ExitGeneral}
+	}
+	return nil
+}
+
+type PageConvertToLiveCmd struct {
+	Refs []string `arg:"" name:"id-or-url" help:"Page IDs or URLs (all on one site)."`
+}
+
+// convertToLiveWarning is emitted once to stderr (unless --quiet) before any
+// mutation, so callers know the command depends on an unsupported endpoint.
+const convertToLiveWarning = "warning: convert-to-live uses an undocumented Atlassian endpoint " +
+	"and has no supported API undo; it may change or be blocked without notice.\n"
+
+func (c *PageConvertToLiveCmd) Run(cli *CLI) error {
+	// pair binds each caller input to the page id resolved from it.
+	type pair struct {
+		input  string
+		pageID string
+	}
+	var pairs []pair
+	var urlRefs []confluenceurl.Ref
+	var siteURLArg string
+
+	for _, arg := range c.Refs {
+		r, matched, perr := confluenceurl.Parse(arg)
+		if matched && perr != nil {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: perr.Error(),
+				Hint:   "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123).",
+				Input:  arg,
+				Code:   output.ExitGeneral,
+			}
+		}
+		if !matched {
+			pairs = append(pairs, pair{input: arg, pageID: arg})
+			continue
+		}
+		if r.Kind != confluenceurl.KindPage || r.PageID == "" {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "URL does not identify a page",
+				Hint:   "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123).",
+				Input:  arg,
+				Code:   output.ExitGeneral,
+			}
+		}
+		urlRefs = append(urlRefs, r)
+		siteURLArg = arg
+		pairs = append(pairs, pair{input: arg, pageID: r.PageID})
+	}
+
+	// Resolve one site for the whole batch before any mutation, so a mixed-site
+	// batch can never partially convert one tenant before failing.
+	siteHint := ""
+	if len(urlRefs) > 0 {
+		site, cerr := confluenceurl.CommonSite(urlRefs)
+		if cerr != nil {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "all pages must be on one site",
+				Hint:   "Split into one invocation per site.",
+				Code:   output.ExitGeneral,
+			}
+		}
+		siteHint = site
+		if cli.Site != "" {
+			if err := requireSiteMatch(cli.Site, siteURLArg); err != nil {
+				return err
+			}
+		}
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	// Warn once, after validation and before the first mutation.
+	if !cli.Quiet {
+		_, _ = io.WriteString(cli.stderr(), convertToLiveWarning)
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	p := cli.NewPrinter()
+	errCount := 0
+	for _, pr := range pairs {
+		if err := client.ConvertPageToLive(ctx, pr.pageID); err != nil {
+			oErr := cli.ClassifyError(err)
+			oErr.Input = pr.input
+			if err := p.PrintItem(oErr.AsItem()); err != nil {
+				return err
+			}
+			errCount++
+			continue
+		}
+		// converted:true means the mutation returned success. The command does
+		// not read the page back, so it does not report subtype here; verify with
+		// 'confluence page get <id>' if needed.
+		row := map[string]any{
+			"input":     pr.input,
+			"id":        pr.pageID,
+			"converted": true,
 		}
 		if err := p.PrintItem(row); err != nil {
 			return err

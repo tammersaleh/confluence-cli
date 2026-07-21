@@ -9,7 +9,7 @@ Kong. Auth is an API token + email over HTTP Basic.
 contract. The read and write surface ships today: `version`, `space sync`,
 `space info`, `space list`, `auth`, `page list`, `page get`, `page children`,
 `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`,
-`page delete`,
+`page delete`, `page convert-to-live`,
 `attachment list`, `attachment download`, `attachment upload`, `search`,
 `comment list`, `comment add`, `label list`, `label add`, `label remove`,
 `user current`, and `user info`. The full command surface is implemented. See
@@ -26,7 +26,7 @@ internal/
     version.go                 `version` command.
     space.go                   `space sync` (wraps the sync engine), `space info`, and `space list` commands.
     auth.go                    `auth login|status|logout` commands.
-    page.go                    `page list/get/children/descendants/ancestors/tree` (reads) + `page create/update/delete` (writes). Derives site/space from --space or URL args; --body-format incl. derived markdown on read. `page tree` builds the hierarchy in-command, sorted by ID (not display order). `page update` preflights GetPage to enforce --if-version (version_conflict) and preserve title/body when not supplied.
+    page.go                    `page list/get/children/descendants/ancestors/tree` (reads) + `page create/update/delete/convert-to-live` (writes). Derives site/space from --space or URL args; --body-format incl. derived markdown on read. `page get` emits `subtype` when the page is a live doc. `page tree` builds the hierarchy in-command, sorted by ID (not display order). `page update` preflights GetPage to enforce --if-version (version_conflict) and preserve title/body when not supplied. `page create --live` sets subtype=live (supported REST). `page convert-to-live` calls the UNDOCUMENTED internal /cgraphql endpoint (convertPageToLiveEditAction) - no public API exists; warns once on stderr, one site per invocation, inline per-item errors.
     attachment.go              `attachment list`, `attachment download`, `attachment upload` commands.
     search.go                  `search <cql>` command. CQL positional, site-wide, paginated (--limit/--cursor/--all).
     comment.go                 `comment list` (footer + inline; --replies drains reply threads recursively with parent_id) + `comment add` (footer, or inline via --inline --selection-text with --match-index/--match-count).
@@ -43,7 +43,7 @@ internal/
     errors.go                  RateLimitError + generic ClassifyError (domain-agnostic).
     trace.go                   Tracer interface + JSON-lines tracer; the confluence client emits per-request events.
   confluence/
-    client.go                  HTTP client for Confluence Cloud API v2. Retry w/ exponential backoff + jitter. Sentinels (ErrUnauthorized, ErrSpaceNotFound, ...) mapped to structured errors in internal/cli.
+    client.go                  HTTP client for Confluence Cloud API v2. Retry w/ exponential backoff + jitter. Sentinels (ErrUnauthorized, ErrSpaceNotFound, ...) mapped to structured errors in internal/cli. ConvertPageToLive is the lone exception to "v2 REST": it POSTs the undocumented internal /cgraphql endpoint and parses the GraphQL envelope strictly (fail-closed), returning ErrLiveConvertFailed only for HTTP-200 logical failures.
     types.go                   API response types: Space, Page, PageContent, Attachment.
     url.go                     Parses Confluence space URLs into baseURL + spaceKey.
   confluenceurl/
@@ -119,7 +119,7 @@ old Cobra tool's `1 = config / 2 = auth / 3 = api / 4 = filesystem` codes
 
 ## Commands
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`. Write commands that carry content (`page create`, `page update`, `comment add`) take the body on stdin with `--body-format storage|adf|markdown` (validated locally via `internal/bodywrite` before the API sees it; `markdown` is converted to storage XHTML via goldmark, where fenced code becomes a plain preformatted block rather than a code macro and raw HTML is escaped).
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `page convert-to-live`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`. Write commands that carry content (`page create`, `page update`, `comment add`) take the body on stdin with `--body-format storage|adf|markdown` (validated locally via `internal/bodywrite` before the API sees it; `markdown` is converted to storage XHTML via goldmark, where fenced code becomes a plain preformatted block rather than a code macro and raw HTML is escaped).
 
 - `confluence version` - emits the build version, then the trailer.
 - `confluence space sync <space-url> <output-dir>` - one-way space crawl to local Markdown. Flags: `--prune`, `--dry-run`, `--quiet`, `--timeout`, `--trace`. Progress goes to stderr; stdout carries a single summary object then the trailer.
@@ -129,14 +129,15 @@ The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `p
 - `confluence auth status` - list configured sites and any active env override, without printing secrets.
 - `confluence auth logout [<site>]` - remove stored credentials for a site. The `<site>` positional is optional when exactly one site is configured.
 - `confluence page list --space <key|url>` - list pages in a space. Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `space_key`, and `parent_id`/`parent_type` when present.
-- `confluence page get <id|url>...` - fetch pages by id or URL (one site per invocation). `--body-format storage|atlas_doc_format (adf)|view|markdown (md)`, default `storage`. ADF `body` is a nested object; `markdown` is derived from storage (attachments resolved to remote URLs) and adds `source_body_format`. `--resolve-authors` adds an `author_name` sibling (best-effort, cached user lookups). Per-item errors go inline and bump `_meta.error_count`.
+- `confluence page get <id|url>...` - fetch pages by id or URL (one site per invocation). `--body-format storage|atlas_doc_format (adf)|view|markdown (md)`, default `storage`. ADF `body` is a nested object; `markdown` is derived from storage (attachments resolved to remote URLs) and adds `source_body_format`. Rows carry `subtype` only for live docs (omitted for regular pages). `--resolve-authors` adds an `author_name` sibling (best-effort, cached user lookups). Per-item errors go inline and bump `_meta.error_count`.
 - `confluence page children <id|url>` - direct children of a page. Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`.
 - `confluence page descendants <id|url>` - all descendants of a page (every level). Flags: `--limit`, `--cursor`, `--all`. Rows carry `id`, `title`, `type`, `depth` (1 for a direct child), and `parent_id` when present.
 - `confluence page ancestors <id|url>` - ancestor chain, root-most first. Not paginated. Rows carry `id`, `type` (the endpoint omits `title`).
 - `confluence page tree --space <key|url>` - space page hierarchy in DFS order. Rows carry `id`, `title`, `type`, `depth`, and `parent_id` when present. Siblings sorted by ID (deterministic, not Confluence display order).
-- `confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf|markdown]` - create a page; body on stdin (`--body-format` required only for a non-empty body; empty stdin = empty page). Row: `id`, `title`, `space_id`, `parent_id?`, `version`, `author_id`, `created_at`, `web_url`. Body not echoed.
+- `confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf|markdown] [--live]` - create a page; body on stdin (`--body-format` required only for a non-empty body; empty stdin = empty page). `--live` creates a live doc (subtype=live). Row: `id`, `title`, `space_id`, `parent_id?`, `version`, `author_id`, `created_at`, `web_url`, and `subtype` when the server returns it. Body not echoed.
 - `confluence page update <id|url> --if-version <n> [--title <t>] [--body-format storage|adf|markdown]` - update under optimistic concurrency; body on stdin. A live-version mismatch fails with `version_conflict` and writes nothing. Title-only preserves body; body-only preserves title. Row: `id`, `title`, `version`, `previous_version`, `web_url`.
 - `confluence page delete <id|url>...` - move pages to trash (not purge). `--yes` required for a real delete; without it (and without `--dry-run`) fails with `confirmation_required`. `--dry-run` previews. Rows echo `input`; per-item errors bump `_meta.error_count`.
+- `confluence page convert-to-live <id|url>...` - convert existing pages to live docs. NO public API exists; this calls the UNDOCUMENTED internal `/cgraphql` endpoint (`convertPageToLiveEditAction`), which may change or be blocked (reportedly blocked from Atlassian automation IP ranges; works with API-token auth from a dev machine) and has no supported undo. Warns once on stderr (suppressed by `--quiet`). One site per invocation. Rows echo `input` and carry `id`, `converted:true`; `converted` means the mutation returned success, NOT a read-back (verify with `page get` and check `subtype`). Per-item failures go inline as `live_convert_failed` and bump `_meta.error_count`; 401/403/404 keep their normal codes.
 - `confluence attachment list <page id|url>` - list a page's attachments. Rows carry `id`, `title`, `media_type`, `download_url` (absolute), `page_id`.
 - `confluence attachment download <id> [-o|--out <path>]` - download an attachment by id (not a URL) to a file; defaults to the attachment filename in the current dir. Emits `id`, `title`, `media_type`, `path`, `bytes`.
 - `confluence attachment upload <page id|url> <file>...` - upload files as attachments (per-file, inline errors). A filename collision creates a new version. Rows echo `input` and carry `page_id`, `attachment_id`, `title`, `media_type`, `uploaded:true`.
