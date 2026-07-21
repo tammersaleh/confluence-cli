@@ -133,6 +133,10 @@ func (m *mockClient) DeletePage(ctx context.Context, pageID string) error {
 	return nil
 }
 
+func (m *mockClient) ConvertPageToLive(ctx context.Context, pageID string) error {
+	return nil
+}
+
 func (m *mockClient) AddFooterComment(ctx context.Context, pageID string, body confluence.WriteBody) (*confluence.Comment, error) {
 	return nil, nil
 }

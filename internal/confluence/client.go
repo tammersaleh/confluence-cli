@@ -1616,6 +1616,129 @@ func (c *client) DeletePage(ctx context.Context, pageID string) error {
 	return nil
 }
 
+// convertToLiveMutation is the GraphQL operation that converts a page to a live
+// doc. The page id is passed via the $input variable, never interpolated into
+// the query string.
+const convertToLiveMutation = `mutation($input: ConvertPageToLiveEditActionInput!){ convertPageToLiveEditAction(input: $input){ success errors { message } } }`
+
+// ConvertPageToLive converts an existing page to a live doc.
+//
+// WARNING: there is no public API for this. It calls Confluence's undocumented
+// internal /cgraphql endpoint (operation convertPageToLiveEditAction). Atlassian
+// may change or remove it without notice, and it is reported to be blocked from
+// some hosted/automation networks. It works with API-token basic auth from a
+// dev machine.
+//
+// Transport failures and non-2xx statuses keep their StatusError/sentinel
+// classification (401 -> ErrUnauthorized, etc.). A 404 stays the generic
+// ErrNotFound rather than ErrPageNotFound, because on this endpoint a 404 more
+// likely means the endpoint moved than that the page is missing. Only an HTTP
+// 200 that reports a logical failure or an unrecognized shape yields
+// ErrLiveConvertFailed.
+func (c *client) ConvertPageToLive(ctx context.Context, pageID string) error {
+	payload := map[string]any{
+		"query": convertToLiveMutation,
+		"variables": map[string]any{
+			"input": map[string]any{"contentId": pageID},
+		},
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshaling request body: %w", err)
+	}
+
+	query := url.Values{}
+	query.Set("q", "convertPageToLiveEditAction")
+
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Accept", "application/json")
+	headers.Set("X-Atlassian-Token", "no-check")
+
+	resp, err := c.doCore(ctx, http.MethodPost, "/cgraphql", reqOptions{
+		query:   query,
+		headers: headers,
+		bodyFactory: func() (io.Reader, error) {
+			return bytes.NewReader(b), nil
+		},
+	})
+	if err != nil {
+		// Preserve the transport taxonomy; do not wrap in ErrLiveConvertFailed.
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return parseConvertToLiveResponse(resp.Body)
+}
+
+// graphQLError is one entry in a GraphQL "errors" array (top-level or nested).
+type graphQLError struct {
+	Message string `json:"message"`
+}
+
+// parseConvertToLiveResponse strictly validates the GraphQL envelope for the
+// live conversion. It fails closed: the conversion is treated as successful only
+// when there are no top-level errors, the action payload is present, success is
+// explicitly true, and the action reported no errors. Anything else (missing
+// fields, contradictory success+errors, malformed body) is a failure. Nested
+// pointers distinguish "absent" from a zero value.
+func parseConvertToLiveResponse(r io.Reader) error {
+	var env struct {
+		Data *struct {
+			Result *struct {
+				Success *bool          `json:"success"`
+				Errors  []graphQLError `json:"errors"`
+			} `json:"convertPageToLiveEditAction"`
+		} `json:"data"`
+		Errors []graphQLError `json:"errors"`
+	}
+	if err := json.NewDecoder(r).Decode(&env); err != nil {
+		return fmt.Errorf("%w: could not decode live conversion response", ErrLiveConvertFailed)
+	}
+
+	// Collect every non-blank message, top-level first, then nested.
+	var msgs []string
+	for _, e := range env.Errors {
+		if strings.TrimSpace(e.Message) != "" {
+			msgs = append(msgs, e.Message)
+		}
+	}
+	if env.Data != nil && env.Data.Result != nil {
+		for _, e := range env.Data.Result.Errors {
+			if strings.TrimSpace(e.Message) != "" {
+				msgs = append(msgs, e.Message)
+			}
+		}
+	}
+
+	fail := func(fallback string) error {
+		detail := strings.Join(msgs, "; ")
+		if detail == "" {
+			detail = fallback
+		}
+		return fmt.Errorf("%w: %s", ErrLiveConvertFailed, detail)
+	}
+
+	if len(env.Errors) > 0 {
+		return fail("live conversion returned GraphQL errors")
+	}
+	if env.Data == nil || env.Data.Result == nil {
+		return fail("live conversion response did not contain data.convertPageToLiveEditAction")
+	}
+	result := env.Data.Result
+	if result.Success == nil {
+		return fail("live conversion response did not contain success")
+	}
+	if len(result.Errors) > 0 {
+		// success:true alongside errors is contradictory; treat as failure.
+		return fail("live conversion reported errors")
+	}
+	if !*result.Success {
+		return fail("live conversion returned success=false without error details")
+	}
+	return nil
+}
+
 func (c *client) AddFooterComment(ctx context.Context, pageID string, body WriteBody) (*Comment, error) {
 	payload := map[string]any{
 		"pageId": pageID,

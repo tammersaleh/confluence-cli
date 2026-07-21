@@ -2199,6 +2199,188 @@ func TestClient_CreatePage_SubtypeOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestClient_ConvertPageToLive_Success(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotQuery  string
+		gotToken  string
+		gotAuth   string
+		gotBody   map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		gotToken = r.Header.Get("X-Atlassian-Token")
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{"data":{"convertPageToLiveEditAction":{"success":true,"errors":null}}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	if err := c.ConvertPageToLive(context.Background(), "12345"); err != nil {
+		t.Fatalf("ConvertPageToLive() error: %v", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/cgraphql" {
+		t.Errorf("path = %q, want /cgraphql", gotPath)
+	}
+	if gotQuery != "q=convertPageToLiveEditAction" {
+		t.Errorf("query = %q, want q=convertPageToLiveEditAction", gotQuery)
+	}
+	if gotToken != "no-check" {
+		t.Errorf("X-Atlassian-Token = %q, want no-check", gotToken)
+	}
+	if !strings.HasPrefix(gotAuth, "Basic ") {
+		t.Errorf("Authorization = %q, want Basic auth", gotAuth)
+	}
+	// The page id must travel in variables, not be interpolated into the query.
+	q, _ := gotBody["query"].(string)
+	if strings.Contains(q, "12345") {
+		t.Errorf("query interpolates the page id: %q", q)
+	}
+	vars, _ := gotBody["variables"].(map[string]any)
+	input, _ := vars["input"].(map[string]any)
+	if input["contentId"] != "12345" {
+		t.Errorf("variables.input.contentId = %v, want 12345", input["contentId"])
+	}
+}
+
+func TestClient_ConvertPageToLive_LogicalFailures(t *testing.T) {
+	cases := []struct {
+		name     string
+		response string
+		wantMsg  string
+	}{
+		{"top-level errors", `{"errors":[{"message":"nope"}],"data":null}`, "nope"},
+		{"success false with errors", `{"data":{"convertPageToLiveEditAction":{"success":false,"errors":[{"message":"bad id"}]}}}`, "bad id"},
+		{"success false no errors", `{"data":{"convertPageToLiveEditAction":{"success":false,"errors":null}}}`, "success=false"},
+		{"success true with errors", `{"data":{"convertPageToLiveEditAction":{"success":true,"errors":[{"message":"weird"}]}}}`, "weird"},
+		{"missing action", `{"data":{}}`, "convertPageToLiveEditAction"},
+		{"missing data", `{}`, "convertPageToLiveEditAction"},
+		{"missing success", `{"data":{"convertPageToLiveEditAction":{"errors":null}}}`, "success"},
+		{"malformed json", `<html>login</html>`, "decode"},
+		{"empty body", ``, "decode"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(tc.response))
+			}))
+			defer server.Close()
+
+			c := NewClient(server.URL, "test@example.com", "api-token")
+			err := c.ConvertPageToLive(context.Background(), "1")
+			if !errors.Is(err, ErrLiveConvertFailed) {
+				t.Fatalf("error = %v, want ErrLiveConvertFailed", err)
+			}
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error = %q, want to contain %q", err.Error(), tc.wantMsg)
+			}
+		})
+	}
+}
+
+func TestClient_ConvertPageToLive_UnknownFieldsAccepted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"convertPageToLiveEditAction":{"success":true,"errors":null,"newField":42}},"extensions":{"x":1}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	if err := c.ConvertPageToLive(context.Background(), "1"); err != nil {
+		t.Errorf("unknown fields should be tolerated, got error: %v", err)
+	}
+}
+
+func TestClient_ConvertPageToLive_StatusErrorsPreserved(t *testing.T) {
+	cases := []struct {
+		status   int
+		sentinel error
+	}{
+		{http.StatusUnauthorized, ErrUnauthorized},
+		{http.StatusForbidden, ErrForbidden},
+		{http.StatusNotFound, ErrNotFound},
+	}
+	for _, tc := range cases {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(tc.status)
+		}))
+		c := NewClient(server.URL, "test@example.com", "api-token")
+		err := c.ConvertPageToLive(context.Background(), "1")
+		if !errors.Is(err, tc.sentinel) {
+			t.Errorf("status %d: error = %v, want %v", tc.status, err, tc.sentinel)
+		}
+		if errors.Is(err, ErrLiveConvertFailed) {
+			t.Errorf("status %d: must not be ErrLiveConvertFailed", tc.status)
+		}
+		server.Close()
+	}
+}
+
+func TestClient_ConvertPageToLive_RetryResendsBodyAndHeader(t *testing.T) {
+	old := baseRetryDelay
+	baseRetryDelay = time.Millisecond
+	defer func() { baseRetryDelay = old }()
+
+	var attempts int
+	var lastToken string
+	var lastContentID any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		lastToken = r.Header.Get("X-Atlassian-Token")
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if vars, ok := body["variables"].(map[string]any); ok {
+			if input, ok := vars["input"].(map[string]any); ok {
+				lastContentID = input["contentId"]
+			}
+		}
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte(`{"data":{"convertPageToLiveEditAction":{"success":true,"errors":null}}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	if err := c.ConvertPageToLive(context.Background(), "77"); err != nil {
+		t.Fatalf("ConvertPageToLive() error: %v", err)
+	}
+	if attempts < 2 {
+		t.Fatalf("expected a retry, got %d attempts", attempts)
+	}
+	if lastToken != "no-check" {
+		t.Errorf("retry X-Atlassian-Token = %q, want no-check", lastToken)
+	}
+	if lastContentID != "77" {
+		t.Errorf("retry contentId = %v, want 77", lastContentID)
+	}
+}
+
+func TestClient_OrdinaryRequestHasNoAtlassianToken(t *testing.T) {
+	var gotToken string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotToken = r.Header.Get("X-Atlassian-Token")
+		w.Write([]byte(`{"results":[{"id":"1","key":"ENG","name":"Engineering"}]}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	if _, err := c.GetSpace(context.Background(), "ENG"); err != nil {
+		t.Fatalf("GetSpace() error: %v", err)
+	}
+	if gotToken != "" {
+		t.Errorf("ordinary v2 request carried X-Atlassian-Token = %q, want none", gotToken)
+	}
+}
+
 func TestClient_CreatePage_NoParentNoBody(t *testing.T) {
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

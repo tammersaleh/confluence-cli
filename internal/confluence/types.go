@@ -17,6 +17,11 @@ var (
 	ErrUnauthorized       = errors.New("unauthorized")
 	ErrForbidden          = errors.New("forbidden")
 	ErrAPIError           = errors.New("API error")
+	// ErrLiveConvertFailed is returned only for HTTP-200 logical or protocol
+	// failures from the undocumented live-conversion endpoint (GraphQL errors,
+	// success=false, or an unrecognized response shape). Transport failures and
+	// non-2xx statuses keep their StatusError/sentinel classification.
+	ErrLiveConvertFailed = errors.New("live conversion failed")
 )
 
 // StatusError is a typed transport error returned by doRequest for non-2xx
@@ -229,6 +234,10 @@ type Client interface {
 	CreatePage(ctx context.Context, p CreatePageParams) (*PageRecord, error)
 	UpdatePage(ctx context.Context, p UpdatePageParams) (*PageRecord, error)
 	DeletePage(ctx context.Context, pageID string) error
+	// ConvertPageToLive converts an existing page to a live doc. It uses an
+	// undocumented internal Confluence endpoint (no public API exists); see
+	// the implementation for caveats.
+	ConvertPageToLive(ctx context.Context, pageID string) error
 	AddFooterComment(ctx context.Context, pageID string, body WriteBody) (*Comment, error)
 	AddInlineComment(ctx context.Context, pageID string, body WriteBody, sel InlineCommentSelection) (*Comment, error)
 	AddLabel(ctx context.Context, pageID, label string) (*Label, error)
