@@ -24,7 +24,11 @@ type Error struct {
 	Hint     string `json:"hint,omitempty"`
 	Input    string `json:"input,omitempty"`
 	Endpoint string `json:"endpoint,omitempty"`
-	Code     int    `json:"-"`
+	// Data carries error-specific structured context (e.g. the blocking inline
+	// comments for unresolved_inline_comments). It is always a JSON object.
+	// Not subject to --fields filtering (that governs stdout data rows only).
+	Data map[string]any `json:"data,omitempty"`
+	Code int            `json:"-"`
 }
 
 func (e *Error) Error() string {

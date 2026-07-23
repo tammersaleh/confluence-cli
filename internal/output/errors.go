@@ -17,5 +17,8 @@ func (e *Error) AsItem() map[string]any {
 	if e.Hint != "" {
 		m["hint"] = e.Hint
 	}
+	if len(e.Data) > 0 {
+		m["data"] = e.Data
+	}
 	return m
 }
