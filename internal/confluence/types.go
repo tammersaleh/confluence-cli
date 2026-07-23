@@ -17,6 +17,10 @@ var (
 	ErrUnauthorized       = errors.New("unauthorized")
 	ErrForbidden          = errors.New("forbidden")
 	ErrAPIError           = errors.New("API error")
+	// ErrVersionConflict is returned only by UpdatePage when the server rejects
+	// the write with HTTP 409 (a concurrent edit landed between the caller's
+	// read and this write). It is not applied to 409s from other endpoints.
+	ErrVersionConflict = errors.New("version conflict")
 	// ErrLiveConvertFailed is returned only for HTTP-200 logical or protocol
 	// failures from the undocumented live-conversion endpoint (GraphQL errors,
 	// success=false, or an unrecognized response shape). Transport failures and
@@ -108,14 +112,20 @@ type SearchResult struct {
 }
 
 // Comment is a footer or inline comment on a page. Kind is "footer" or "inline".
-// Body is the storage-format (XHTML) value.
+// Body is the storage-format (XHTML) value. The three inline-only fields are
+// populated verbatim from the API for inline comments and left empty for footer
+// comments; ResolutionStatus is NOT normalized (only exact "resolved" is a
+// resolved anchor - see the page update guard).
 type Comment struct {
-	ID        string
-	Kind      string // "footer" or "inline"
-	Body      string
-	AuthorID  string
-	CreatedAt string // ISO 8601
-	WebURL    string // Browser URL to view the comment
+	ID                string
+	Kind              string // "footer" or "inline"
+	Body              string
+	AuthorID          string
+	CreatedAt         string // ISO 8601
+	WebURL            string // Browser URL to view the comment
+	ResolutionStatus  string // inline only: "open"|"reopened"|"resolved"|"dangling" (raw)
+	OriginalSelection string // inline only: the highlighted anchor text
+	InlineMarkerRef   string // inline only: the body marker id for the anchor
 }
 
 // Label is a label attached to a page.
@@ -155,6 +165,8 @@ type PageDetail struct {
 	ID         string
 	Title      string
 	SpaceID    string
+	Status     string // "current", "draft", etc. - preserved verbatim on update
+	ParentID   string // parent page id, "" for a space root
 	Version    int
 	AuthorID   string
 	CreatedAt  string // ISO 8601
@@ -199,14 +211,18 @@ type CreatePageParams struct {
 }
 
 // UpdatePageParams are the inputs to UpdatePage. Version is the NEW version
-// number to send (the caller computes it, typically current+1). Status defaults
-// to "current" when empty.
+// number to send (the caller computes it, typically current+1). Status is
+// preserved verbatim from the current page and must be supplied (UpdatePage no
+// longer defaults it to "current", which would silently change a draft).
+// ParentID reparents the page when non-nil; nil omits parentId entirely so an
+// ordinary update never moves the page.
 type UpdatePageParams struct {
-	ID      string
-	Title   string
-	Status  string
-	Version int
-	Body    WriteBody
+	ID       string
+	Title    string
+	Status   string
+	Version  int
+	Body     WriteBody
+	ParentID *string
 }
 
 type Client interface {
@@ -214,7 +230,10 @@ type Client interface {
 	GetUser(ctx context.Context, accountID string) (*CurrentUser, error)
 	Search(ctx context.Context, cql, cursor string, limit int) (results []SearchResult, nextCursor string, err error)
 	GetFooterComments(ctx context.Context, pageID, cursor string, limit int) (comments []Comment, nextCursor string, err error)
-	GetInlineComments(ctx context.Context, pageID, cursor string, limit int) (comments []Comment, nextCursor string, err error)
+	// GetInlineComments lists inline comments. resolutionStatus, when non-empty,
+	// server-side filters by "open"|"reopened"|"resolved"|"dangling"; empty
+	// returns every inline comment.
+	GetInlineComments(ctx context.Context, pageID, cursor string, limit int, resolutionStatus string) (comments []Comment, nextCursor string, err error)
 	GetCommentChildren(ctx context.Context, commentID, kind, cursor string, limit int) (comments []Comment, nextCursor string, err error)
 	GetLabels(ctx context.Context, pageID, cursor string, limit int) (labels []Label, nextCursor string, err error)
 	GetSpace(ctx context.Context, spaceKey string) (*Space, error)

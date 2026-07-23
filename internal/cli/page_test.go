@@ -1622,15 +1622,28 @@ func TestPageCreate_ParentResolves(t *testing.T) {
 
 // capturedUpdate records whether a PUT happened and its decoded body.
 type capturedUpdate struct {
-	called  bool
-	title   string
-	version int
-	bodyRep string
-	bodyVal string
+	called       bool
+	title        string
+	status       string
+	version      int
+	bodyRep      string
+	bodyVal      string
+	hasParent    bool
+	parentID     string
+	inlineDrains int
 }
 
-// pageUpdateServer serves the preflight GET and the PUT, capturing the PUT body.
+// pageUpdateServer serves the preflight GET, the PUT, and an empty
+// inline-comments list (so the guard passes). GET returns curBody under
+// whichever body-format is requested.
 func pageUpdateServer(t *testing.T, curVersion int, curTitle, curBody string, cap *capturedUpdate) *httptest.Server {
+	return pageUpdateServerWithInline(t, curVersion, curTitle, curBody, "", cap)
+}
+
+// pageUpdateServerWithInline is pageUpdateServer plus a caller-supplied
+// inline-comments results array (JSON, without the surrounding results wrapper),
+// used to exercise the inline-comment guard.
+func pageUpdateServerWithInline(t *testing.T, curVersion int, curTitle, curBody, inlineResults string, cap *capturedUpdate) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const prefix = "/wiki/api/v2/pages/"
@@ -1639,16 +1652,29 @@ func pageUpdateServer(t *testing.T, curVersion int, curTitle, curBody string, ca
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		id := strings.TrimPrefix(r.URL.Path, prefix)
+		rest := strings.TrimPrefix(r.URL.Path, prefix)
+		if id, ok := strings.CutSuffix(rest, "/inline-comments"); ok {
+			_ = id
+			cap.inlineDrains++
+			_, _ = w.Write([]byte(`{"results":[` + inlineResults + `],"_links":{"next":""}}`))
+			return
+		}
+		id := rest
 		switch r.Method {
 		case http.MethodGet:
+			bodyField := `"storage": {"value": ` + jsonQuote(curBody) + `}`
+			if r.URL.Query().Get("body-format") == "atlas_doc_format" {
+				bodyField = `"atlas_doc_format": {"value": ` + jsonQuote(curBody) + `}`
+			}
 			_, _ = w.Write([]byte(`{
 				"id": "` + id + `",
 				"title": ` + jsonQuote(curTitle) + `,
 				"spaceId": "space1",
+				"status": "current",
+				"parentId": "100",
 				"authorId": "user1",
 				"createdAt": "2024-01-01T00:00:00Z",
-				"body": {"storage": {"value": ` + jsonQuote(curBody) + `}},
+				"body": {` + bodyField + `},
 				"version": {"number": ` + fmt.Sprint(curVersion) + `, "createdAt": "2024-06-20T00:00:00Z"},
 				"_links": {"webui": "/spaces/T/pages/` + id + `/P"}
 			}`))
@@ -1659,6 +1685,8 @@ func pageUpdateServer(t *testing.T, curVersion int, curTitle, curBody string, ca
 				t.Errorf("decode PUT body: %v", err)
 			}
 			cap.title, _ = payload["title"].(string)
+			cap.status, _ = payload["status"].(string)
+			cap.parentID, cap.hasParent = payload["parentId"].(string)
 			if v, ok := payload["version"].(map[string]any); ok {
 				if n, ok := v["number"].(float64); ok {
 					cap.version = int(n)
@@ -1695,7 +1723,7 @@ func TestPageUpdate_Conflict(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	c := newWriteCLI(t, &out, &errBuf, "")
 
-	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 7}
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 7, Title: "New"}
 	err := cmd.Run(c)
 
 	var oErr *output.Error
@@ -1708,12 +1736,16 @@ func TestPageUpdate_Conflict(t *testing.T) {
 	if cap.called {
 		t.Errorf("PUT should not be called on version conflict")
 	}
+	if cap.inlineDrains != 0 {
+		t.Errorf("guard must not run on a version conflict (drains=%d)", cap.inlineDrains)
+	}
 }
 
-func TestPageUpdate_TitleOnlyPreservesBody(t *testing.T) {
+func TestPageUpdate_TitleOnlyPreservesBodyAsADF(t *testing.T) {
 	clearCredEnv(t)
 	var cap capturedUpdate
-	server := pageUpdateServer(t, 5, "Old Title", "<p>current</p>", &cap)
+	adf := `{"type":"doc","version":1,"content":[]}`
+	server := pageUpdateServer(t, 5, "Old Title", adf, &cap)
 	defer server.Close()
 	setEnvCreds(t, server.URL)
 
@@ -1730,15 +1762,58 @@ func TestPageUpdate_TitleOnlyPreservesBody(t *testing.T) {
 	if cap.title != "New Title" {
 		t.Errorf("title sent = %q, want New Title", cap.title)
 	}
-	if cap.bodyRep != "storage" || cap.bodyVal != "<p>current</p>" {
-		t.Errorf("body sent = %q/%q, want storage/<p>current</p> (preserved)", cap.bodyRep, cap.bodyVal)
+	// No-body update preserves the body as ADF (exact passthrough), not storage.
+	if cap.bodyRep != "atlas_doc_format" || cap.bodyVal != adf {
+		t.Errorf("body sent = %q/%q, want atlas_doc_format/%s (preserved)", cap.bodyRep, cap.bodyVal, adf)
+	}
+	if cap.status != "current" {
+		t.Errorf("status sent = %q, want current (preserved)", cap.status)
+	}
+	if cap.hasParent {
+		t.Errorf("ordinary update must not send parentId")
 	}
 	if cap.version != 6 {
 		t.Errorf("version sent = %d, want 6", cap.version)
 	}
 	lines := parseLines(t, out.String())
-	if lines[0]["previous_version"] != float64(5) || lines[0]["version"] != float64(6) {
-		t.Errorf("row versions unexpected: %v", lines[0])
+	if lines[0]["previous_version"] != float64(5) || lines[0]["version"] != float64(6) || lines[0]["updated"] != true {
+		t.Errorf("row unexpected: %v", lines[0])
+	}
+}
+
+func TestPageUpdate_TitleUnchangedIsNoOp(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	server := pageUpdateServer(t, 5, "Same Title", `{"type":"doc","version":1,"content":[]}`, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 5, Title: "Same Title"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if cap.called {
+		t.Errorf("no-op title update must not PUT")
+	}
+	lines := parseLines(t, out.String())
+	if lines[0]["updated"] != false || lines[0]["version"] != float64(5) {
+		t.Errorf("expected updated=false version=5, got %v", lines[0])
+	}
+}
+
+func TestPageUpdate_NothingToUpdate(t *testing.T) {
+	clearCredEnv(t)
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 5}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "invalid_input" {
+		t.Fatalf("expected invalid_input for no-op, got %v", err)
 	}
 }
 
@@ -1766,6 +1841,346 @@ func TestPageUpdate_BodyUpdate(t *testing.T) {
 	lines := parseLines(t, out.String())
 	if lines[0]["previous_version"] != float64(5) {
 		t.Errorf("previous_version = %v, want 5", lines[0]["previous_version"])
+	}
+}
+
+// An open inline comment blocks a body-replacing update; no PUT, and the fatal
+// error carries the blocking comment in data.
+func TestPageUpdate_GuardBlocksUnresolved(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	inline := `{"id":"ic1","body":{"storage":{"value":"<p>q</p>"}},"version":{"authorId":"u1"},"resolutionStatus":"open","properties":{"inlineOriginalSelection":"target","inlineMarkerRef":"m1"},"_links":{"webui":"https://x/w/ic1"}}`
+	server := pageUpdateServerWithInline(t, 5, "T", "<p>cur</p>", inline, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "<p>new</p>")
+
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 5, BodyFormat: "storage"}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "unresolved_inline_comments" {
+		t.Fatalf("expected unresolved_inline_comments, got %v", err)
+	}
+	if cap.called {
+		t.Errorf("guard must prevent the PUT")
+	}
+	blockers, ok := oErr.Data["blocking_comments"].([]map[string]any)
+	if !ok || len(blockers) != 1 {
+		t.Fatalf("expected 1 blocking comment in data, got %v", oErr.Data)
+	}
+	b := blockers[0]
+	if b["id"] != "ic1" || b["resolution_status"] != "open" || b["original_selection"] != "target" || b["inline_marker_ref"] != "m1" {
+		t.Errorf("blocker payload unexpected: %v", b)
+	}
+	if out.String() != "" {
+		t.Errorf("nothing should reach stdout on a fatal refusal, got %q", out.String())
+	}
+}
+
+// A resolved inline comment does not block; the update proceeds.
+func TestPageUpdate_GuardAllowsResolved(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	inline := `{"id":"ic1","body":{"storage":{"value":"<p>q</p>"}},"version":{"authorId":"u1"},"resolutionStatus":"resolved"}`
+	server := pageUpdateServerWithInline(t, 5, "T", "<p>cur</p>", inline, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "<p>new</p>")
+
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 5, BodyFormat: "storage"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !cap.called {
+		t.Errorf("resolved comments must not block the PUT")
+	}
+}
+
+// A no-body (title-only) update re-sends exact ADF and is NOT guarded, even with
+// an open inline comment present: it never drains and the PUT lands.
+func TestPageUpdate_TitleOnlySkipsGuard(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	inline := `{"id":"ic1","resolutionStatus":"open","properties":{"inlineOriginalSelection":"t","inlineMarkerRef":"m1"}}`
+	server := pageUpdateServerWithInline(t, 5, "Old", `{"type":"doc","version":1,"content":[]}`, inline, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "") // no body
+
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 5, Title: "New"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !cap.called {
+		t.Errorf("title-only update should PUT")
+	}
+	if cap.inlineDrains != 0 {
+		t.Errorf("title-only update must not run the inline-comment guard (drains=%d)", cap.inlineDrains)
+	}
+}
+
+// The override skips the inspection entirely (no drain) and lets the write land.
+func TestPageUpdate_GuardOverrideSkipsInspection(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	inline := `{"id":"ic1","body":{"storage":{"value":"<p>q</p>"}},"version":{"authorId":"u1"},"resolutionStatus":"open"}`
+	server := pageUpdateServerWithInline(t, 5, "T", "<p>cur</p>", inline, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "<p>new</p>")
+
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 5, BodyFormat: "storage", AllowUnresolvedInlineComments: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !cap.called {
+		t.Errorf("override should allow the PUT")
+	}
+	if cap.inlineDrains != 0 {
+		t.Errorf("override must skip the inline-comment request entirely (drains=%d)", cap.inlineDrains)
+	}
+}
+
+type moveServerConfig struct {
+	srcID, dstID   string
+	srcVersion     int
+	srcParentID    string
+	srcSpaceID     string
+	srcBody        string // ADF
+	dstSpaceID     string
+	ancestorsOfDst []string
+	putStatus      int // 0 => 200 OK; otherwise the PUT returns this status
+}
+
+// pageMoveServer serves the source GET (ADF), destination GET (storage), source
+// ancestors, and the reparent PUT. A move does not drain inline comments, so any
+// inline-comments request is an unexpected call and fails the test.
+func pageMoveServer(t *testing.T, cfg moveServerConfig, cap *capturedUpdate) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "/wiki/api/v2/pages/"
+		rest := strings.TrimPrefix(r.URL.Path, prefix)
+		switch {
+		case rest == cfg.srcID+"/inline-comments":
+			t.Errorf("page move must not drain inline comments")
+			w.WriteHeader(http.StatusNotFound)
+		case rest == cfg.dstID+"/ancestors":
+			parts := make([]string, 0, len(cfg.ancestorsOfDst))
+			for _, id := range cfg.ancestorsOfDst {
+				parts = append(parts, `{"id":`+jsonQuote(id)+`,"type":"page"}`)
+			}
+			_, _ = w.Write([]byte(`{"results":[` + strings.Join(parts, ",") + `],"_links":{"next":""}}`))
+		case rest == cfg.srcID && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{
+				"id": ` + jsonQuote(cfg.srcID) + `,
+				"title": "Source",
+				"spaceId": ` + jsonQuote(cfg.srcSpaceID) + `,
+				"status": "current",
+				"parentId": ` + jsonQuote(cfg.srcParentID) + `,
+				"body": {"atlas_doc_format": {"value": ` + jsonQuote(cfg.srcBody) + `}},
+				"version": {"number": ` + fmt.Sprint(cfg.srcVersion) + `},
+				"_links": {"webui": "/spaces/T/pages/` + cfg.srcID + `/S"}
+			}`))
+		case rest == cfg.dstID && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{
+				"id": ` + jsonQuote(cfg.dstID) + `,
+				"title": "Dest",
+				"spaceId": ` + jsonQuote(cfg.dstSpaceID) + `,
+				"status": "current",
+				"body": {"storage": {"value": "<p>d</p>"}},
+				"version": {"number": 1},
+				"_links": {"webui": "/spaces/T/pages/` + cfg.dstID + `/D"}
+			}`))
+		case rest == cfg.srcID && r.Method == http.MethodPut:
+			if cfg.putStatus != 0 {
+				w.WriteHeader(cfg.putStatus)
+				_, _ = w.Write([]byte(`{"message":"conflict"}`))
+				return
+			}
+			cap.called = true
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode PUT body: %v", err)
+			}
+			cap.title, _ = payload["title"].(string)
+			cap.status, _ = payload["status"].(string)
+			cap.parentID, cap.hasParent = payload["parentId"].(string)
+			if v, ok := payload["version"].(map[string]any); ok {
+				if n, ok := v["number"].(float64); ok {
+					cap.version = int(n)
+				}
+			}
+			if b, ok := payload["body"].(map[string]any); ok {
+				cap.bodyRep, _ = b["representation"].(string)
+				cap.bodyVal, _ = b["value"].(string)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": cfg.srcID, "title": cap.title, "spaceId": cfg.srcSpaceID,
+				"version": map[string]any{"number": cap.version},
+				"_links":  map[string]any{"webui": "/spaces/T/pages/" + cfg.srcID + "/S"},
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestPageMove_SameSpace(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	adf := `{"type":"doc","version":1,"content":[]}`
+	server := pageMoveServer(t, moveServerConfig{
+		srcID: "100", dstID: "200", srcVersion: 5, srcParentID: "50",
+		srcSpaceID: "s1", srcBody: adf, dstSpaceID: "s1",
+	}, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageMoveCmd{Ref: "100", Parent: "200", IfVersion: 5}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !cap.called {
+		t.Fatalf("PUT not called")
+	}
+	if !cap.hasParent || cap.parentID != "200" {
+		t.Errorf("parentId sent = %q (present=%v), want 200", cap.parentID, cap.hasParent)
+	}
+	if cap.bodyRep != "atlas_doc_format" || cap.bodyVal != adf {
+		t.Errorf("body sent = %q/%q, want ADF preserved", cap.bodyRep, cap.bodyVal)
+	}
+	if cap.status != "current" || cap.version != 6 {
+		t.Errorf("status/version = %q/%d, want current/6", cap.status, cap.version)
+	}
+	lines := parseLines(t, out.String())
+	r := lines[0]
+	if r["moved"] != true || r["previous_parent_id"] != "50" || r["parent_id"] != "200" || r["version"] != float64(6) {
+		t.Errorf("row unexpected: %v", r)
+	}
+}
+
+func TestPageMove_CrossSpaceRefused(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	server := pageMoveServer(t, moveServerConfig{
+		srcID: "100", dstID: "200", srcVersion: 5, srcParentID: "50",
+		srcSpaceID: "s1", srcBody: `{"x":1}`, dstSpaceID: "s2",
+	}, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageMoveCmd{Ref: "100", Parent: "200", IfVersion: 5}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "cross_space_move_unsupported" {
+		t.Fatalf("expected cross_space_move_unsupported, got %v", err)
+	}
+	if cap.called {
+		t.Errorf("cross-space move must not PUT")
+	}
+	if oErr.Data["source_space_id"] != "s1" || oErr.Data["destination_space_id"] != "s2" {
+		t.Errorf("error data unexpected: %v", oErr.Data)
+	}
+}
+
+func TestPageMove_SelfParent(t *testing.T) {
+	clearCredEnv(t)
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+	cmd := &PageMoveCmd{Ref: "100", Parent: "100", IfVersion: 5}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "invalid_move" {
+		t.Fatalf("expected invalid_move for self-parent, got %v", err)
+	}
+}
+
+func TestPageMove_NoopWhenAlreadyChild(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	server := pageMoveServer(t, moveServerConfig{
+		srcID: "100", dstID: "200", srcVersion: 5, srcParentID: "200",
+		srcSpaceID: "s1", srcBody: `{"x":1}`, dstSpaceID: "s1",
+	}, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+	cmd := &PageMoveCmd{Ref: "100", Parent: "200", IfVersion: 5}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if cap.called {
+		t.Errorf("no-op move must not PUT")
+	}
+	lines := parseLines(t, out.String())
+	if lines[0]["moved"] != false || lines[0]["version"] != float64(5) {
+		t.Errorf("expected moved=false version=5, got %v", lines[0])
+	}
+}
+
+func TestPageMove_CycleRefused(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	// Destination 200's ancestors include the source 100 -> moving 100 under 200
+	// would create a cycle.
+	server := pageMoveServer(t, moveServerConfig{
+		srcID: "100", dstID: "200", srcVersion: 5, srcParentID: "50",
+		srcSpaceID: "s1", srcBody: `{"x":1}`, dstSpaceID: "s1",
+		ancestorsOfDst: []string{"100"},
+	}, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+	cmd := &PageMoveCmd{Ref: "100", Parent: "200", IfVersion: 5}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "invalid_move" {
+		t.Fatalf("expected invalid_move for cycle, got %v", err)
+	}
+	if cap.called {
+		t.Errorf("cycle move must not PUT")
+	}
+}
+
+func TestPageMove_VersionConflict(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	server := pageMoveServer(t, moveServerConfig{
+		srcID: "100", dstID: "200", srcVersion: 8, srcParentID: "50",
+		srcSpaceID: "s1", srcBody: `{"x":1}`, dstSpaceID: "s1",
+	}, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+	cmd := &PageMoveCmd{Ref: "100", Parent: "200", IfVersion: 5}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "version_conflict" {
+		t.Fatalf("expected version_conflict, got %v", err)
+	}
+	if cap.called {
+		t.Errorf("version conflict must not PUT")
 	}
 }
 

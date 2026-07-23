@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `page convert-to-live`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
 
 ## Design principles
 
@@ -49,6 +49,7 @@ Errors that prevent the command from running (auth failure, network error, bad i
 - `hint` - a concrete recovery command. Every hint names a command the caller can run next.
 - `input` - the specific input that failed.
 - `endpoint` - the Confluence API endpoint, present only on upstream API failures.
+- `data` - an error-specific structured object, present only when an error carries structured context (e.g. the blocking comments for `unresolved_inline_comments`, or the source/destination spaces for `cross_space_move_unsupported`). Always an object; not subject to `--fields`.
 
 ### Timestamp enrichment
 
@@ -91,7 +92,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page delete`, `page convert-to-live`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### Body input for writes
 
@@ -363,16 +364,16 @@ $ printf '<p>Hello</p>' | confluence page create --space ENG --title "API Design
 ### page update
 
 ```text
-confluence page update <id|url> --if-version <n> [--title <t>] [--body-format storage|adf|markdown] [< body]
+confluence page update <id|url> --if-version <n> [--title <t>] [--body-format storage|adf|markdown] [--allow-unresolved-inline-comments] [< body]
 ```
 
-Update a page under optimistic concurrency. `--if-version` is the version you expect to be current; if the live version differs, the command fails with a recoverable `version_conflict` and writes nothing. On success the page is written at version `n+1`.
+Update a page under optimistic concurrency. `--if-version` is the version you expect to be current; if the live version differs - either at the preflight read or as a PUT-time 409 from a concurrent edit - the command fails with a recoverable `version_conflict` and writes nothing. On success the page is written at version `n+1`.
 
-Omitting `--title` preserves the current title; omitting the piped body preserves the current body. The row carries `id`, `title`, `version`, `previous_version`, and `web_url`.
+Passing neither `--title` nor a body is rejected with `invalid_input`. Omitting `--title` preserves the current title; omitting the piped body preserves the current body as its exact ADF (not a lossy storage round-trip) and preserves the current status. A title-only update whose title equals the current title is a no-op: the row carries `updated:false`, the version does not change, and no write is issued. The row carries `id`, `title`, `version`, `previous_version`, `updated`, and `web_url`.
 
 ```jsonl
 $ printf '<p>Revised.</p>' | confluence page update 123456 --if-version 5 --body-format storage
-{"id":"123456","title":"API Design","version":6,"previous_version":5,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"id":"123456","title":"API Design","version":6,"previous_version":5,"updated":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
 {"_meta":{"has_more":false}}
 ```
 
@@ -380,6 +381,36 @@ A version mismatch is a fatal error on stderr:
 
 ```json
 {"error":"version_conflict","detail":"expected current version 5, got 7","hint":"Fetch the latest with 'confluence page get 123456' and retry with --if-version 7","input":"123456"}
+```
+
+#### Inline-comment guard
+
+A `page update` that pipes a NEW body destroys the anchors of open inline comments (they are markers inside the body). Before such a write, `page update` drains the page's inline comments and refuses with `unresolved_inline_comments` if any is not exactly `resolved` (`open`, `reopened`, `dangling`, and any unknown status all block). The refusal writes nothing, does not bump the version, and carries the blocking comments in the error's `data` object. The check fails closed: if the comments cannot be inspected, the write is refused. `--allow-unresolved-inline-comments` skips the inspection entirely and proceeds; it does not bypass `--if-version` or any other check. A title-only `page update` and `page move` re-send the page's exact ADF (verified against a live page to preserve anchors), so they are not guarded.
+
+```json
+{"error":"unresolved_inline_comments","detail":"refusing to replace the page body: 1 inline comment(s) are not resolved and this write may destroy their anchors","hint":"Resolve or re-anchor the comments in Confluence (see the web URLs), then retry. Pass --allow-unresolved-inline-comments to override.","input":"123456","data":{"page_id":"123456","blocking_comment_count":1,"blocking_comments":[{"id":"c9","resolution_status":"open","original_selection":"the retry budget","inline_marker_ref":"m1","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c9"}]}}
+```
+
+### page move
+
+```text
+confluence page move <id|url> --parent <id|url> --if-version <n>
+```
+
+Reparent a page under a different parent within the SAME space, preserving the page ID, history, comments, and attachments. Both refs must resolve to one site. `--if-version` guards the source page's version as in `page update`.
+
+The Confluence v2 API cannot move a page across spaces; a destination parent in a different space is refused with `cross_space_move_unsupported` (do that move in the Confluence UI). Self-parenting and a destination that is a descendant of the source (a cycle) are refused with `invalid_move`. If the page is already under the destination parent, the row carries `moved:false` and no write is issued. A move re-sends the page's exact ADF and changes only the parent, so it does not disturb inline-comment anchors and is not subject to the inline-comment guard.
+
+```jsonl
+$ confluence page move 123456 --parent 200000 --if-version 5
+{"id":"123456","title":"API Design","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"_meta":{"has_more":false}}
+```
+
+A cross-space destination is a fatal error on stderr:
+
+```json
+{"error":"cross_space_move_unsupported","detail":"source page is in space 98765 but destination parent is in space 55555; the Confluence v2 API only reparents within one space","hint":"Open the source page in Confluence and use the Move action to move it across spaces.","input":"123456","data":{"source_page_id":"123456","source_space_id":"98765","destination_page_id":"200000","destination_space_id":"55555"}}
 ```
 
 ### page delete
@@ -493,14 +524,16 @@ $ confluence search 'type = page AND text ~ "runbook"'
 ### comment list
 
 ```text
-confluence comment list <page id|url> [--footer] [--inline] [--replies] [--resolve-authors]
+confluence comment list <page id|url> [--footer] [--inline] [--resolution-status <s>] [--replies] [--resolve-authors]
 ```
 
 List a page's comments. The argument is a numeric page id or a page URL. Footer and inline comments are fully drained, so there is no cursor and the trailer never carries `next_cursor`. `--footer` and `--inline` narrow the output to one kind; without either, both are emitted. A missing page is a fatal `page_not_found`.
 
+`--resolution-status open|reopened|resolved|dangling` filters inline comments by resolution status (server-side). It implies `--inline` and conflicts with `--footer` (an invalid combination or an unknown value fails with `invalid_input` before any network call).
+
 `--resolve-authors` adds an `author_name` sibling next to `author_id`, resolved via a best-effort user lookup (one cached call per unique author; a failed lookup omits `author_name`).
 
-Each row carries `id`, `kind` (`footer` or `inline`), `body`, `author_id`, `created_at`, and `web_url`.
+Each row carries `id`, `kind` (`footer` or `inline`), `body`, `author_id`, `created_at`, and `web_url`. Inline rows also carry `resolution_status`, `original_selection` (the anchored text), and `inline_marker_ref`; footer rows omit these three.
 
 With `--replies`, each comment's reply thread is drained recursively (comment threads are bounded) and emitted after its parent. Reply rows carry an additional `parent_id` pointing at their immediate parent comment; top-level comments omit it.
 

@@ -598,6 +598,21 @@ func TestClient_GetAncestors_NotFound(t *testing.T) {
 	}
 }
 
+// A malformed next link must fail closed (ancestors feeds page-move cycle
+// detection), not silently truncate the chain.
+func TestClient_GetAncestors_MalformedNextFailsClosed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[{"id":"1","type":"page"}],"_links":{"next":"http://[::1"}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.GetAncestors(context.Background(), "100")
+	if !errors.Is(err, ErrAPIError) {
+		t.Fatalf("expected ErrAPIError for malformed next link, got %v", err)
+	}
+}
+
 func TestClient_ListSpaces(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/wiki/api/v2/spaces" {
@@ -1676,31 +1691,81 @@ func TestClient_GetFooterComments_NotFound(t *testing.T) {
 }
 
 func TestClient_GetInlineComments(t *testing.T) {
+	var gotQuery string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/wiki/api/v2/pages/123/inline-comments" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
+		gotQuery = r.URL.RawQuery
 		w.Write([]byte(`{
 			"results": [
-				{"id": "c9", "body": {"storage": {"value": "<p>Hmm</p>"}}, "version": {"authorId": "u2"}}
+				{"id": "c9", "body": {"storage": {"value": "<p>Hmm</p>"}}, "version": {"authorId": "u2"},
+				 "resolutionStatus": "open",
+				 "properties": {"inlineOriginalSelection": "the target text", "inlineMarkerRef": "marker-1"}}
 			]
 		}`))
 	}))
 	defer server.Close()
 
 	c := NewClient(server.URL, "test@example.com", "api-token")
-	comments, _, err := c.GetInlineComments(context.Background(), "123", "", 25)
+	comments, _, err := c.GetInlineComments(context.Background(), "123", "", 25, "")
 	if err != nil {
 		t.Fatalf("GetInlineComments() error: %v", err)
 	}
 	if len(comments) != 1 {
 		t.Fatalf("got %d comments, want 1", len(comments))
 	}
-	if comments[0].Kind != "inline" {
-		t.Errorf("Kind = %q, want inline", comments[0].Kind)
+	got := comments[0]
+	if got.Kind != "inline" || got.ID != "c9" {
+		t.Errorf("Kind/ID = %q/%q, want inline/c9", got.Kind, got.ID)
 	}
-	if comments[0].ID != "c9" {
-		t.Errorf("ID = %q, want c9", comments[0].ID)
+	if got.ResolutionStatus != "open" {
+		t.Errorf("ResolutionStatus = %q, want open", got.ResolutionStatus)
+	}
+	if got.OriginalSelection != "the target text" {
+		t.Errorf("OriginalSelection = %q, want 'the target text'", got.OriginalSelection)
+	}
+	if got.InlineMarkerRef != "marker-1" {
+		t.Errorf("InlineMarkerRef = %q, want marker-1", got.InlineMarkerRef)
+	}
+	// No filter passed -> no resolution-status query param.
+	if strings.Contains(gotQuery, "resolution-status") {
+		t.Errorf("query %q should not carry resolution-status when filter is empty", gotQuery)
+	}
+}
+
+func TestClient_GetInlineComments_ResolutionFilter(t *testing.T) {
+	var gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Write([]byte(`{"results": []}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	if _, _, err := c.GetInlineComments(context.Background(), "123", "", 25, "open"); err != nil {
+		t.Fatalf("GetInlineComments() error: %v", err)
+	}
+	if !strings.Contains(gotQuery, "resolution-status=open") {
+		t.Errorf("query = %q, want resolution-status=open", gotQuery)
+	}
+}
+
+// A nonempty _links.next that carries no cursor must fail closed, not silently
+// end pagination (a drain used as a write precondition depends on this).
+func TestClient_GetInlineComments_MalformedNextFailsClosed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{
+			"results": [{"id": "c1", "body": {"storage": {"value": "<p>x</p>"}}, "version": {"authorId": "u1"}}],
+			"_links": {"next": "/wiki/api/v2/pages/123/inline-comments?limit=25"}
+		}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, _, err := c.GetInlineComments(context.Background(), "123", "", 25, "")
+	if !errors.Is(err, ErrAPIError) {
+		t.Fatalf("expected ErrAPIError for cursorless next link, got %v", err)
 	}
 }
 
@@ -1711,7 +1776,7 @@ func TestClient_GetInlineComments_NotFound(t *testing.T) {
 	defer server.Close()
 
 	c := NewClient(server.URL, "test@example.com", "api-token")
-	_, _, err := c.GetInlineComments(context.Background(), "123", "", 25)
+	_, _, err := c.GetInlineComments(context.Background(), "123", "", 25, "")
 	if !errors.Is(err, ErrPageNotFound) {
 		t.Fatalf("expected ErrPageNotFound, got %v", err)
 	}
@@ -2472,6 +2537,7 @@ func TestClient_UpdatePage(t *testing.T) {
 	rec, err := c.UpdatePage(context.Background(), UpdatePageParams{
 		ID:      "123",
 		Title:   "Updated",
+		Status:  "current",
 		Version: 6,
 		Body:    WriteBody{Representation: BodyFormatStorage, Value: "<p>New</p>"},
 	})
@@ -2488,8 +2554,13 @@ func TestClient_UpdatePage(t *testing.T) {
 	if gotBody["id"] != "123" {
 		t.Errorf("id = %v, want 123", gotBody["id"])
 	}
+	// Status is sent verbatim (no default substitution).
 	if gotBody["status"] != "current" {
-		t.Errorf("status = %v, want current (default)", gotBody["status"])
+		t.Errorf("status = %v, want current (verbatim)", gotBody["status"])
+	}
+	// An ordinary update (nil ParentID) must not send parentId.
+	if _, ok := gotBody["parentId"]; ok {
+		t.Errorf("parentId should be absent for a non-move update, got %v", gotBody["parentId"])
 	}
 	version, ok := gotBody["version"].(map[string]any)
 	if !ok {
@@ -2533,6 +2604,11 @@ func TestClient_UpdatePage_Conflict(t *testing.T) {
 
 	c := NewClient(server.URL, "test@example.com", "api-token")
 	_, err := c.UpdatePage(context.Background(), UpdatePageParams{ID: "123", Version: 2})
+	// A 409 from the update maps to the stable ErrVersionConflict sentinel while
+	// preserving the StatusError endpoint/message.
+	if !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("expected ErrVersionConflict, got %v", err)
+	}
 	var se *StatusError
 	if !errors.As(err, &se) {
 		t.Fatalf("expected *StatusError, got %T: %v", err, err)

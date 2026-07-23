@@ -109,7 +109,7 @@ func (m *mockClient) GetFooterComments(ctx context.Context, pageID, cursor strin
 	return nil, "", nil
 }
 
-func (m *mockClient) GetInlineComments(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Comment, string, error) {
+func (m *mockClient) GetInlineComments(ctx context.Context, pageID, cursor string, limit int, resolutionStatus string) ([]confluence.Comment, string, error) {
 	return nil, "", nil
 }
 

@@ -410,12 +410,11 @@ func (c *client) Search(ctx context.Context, cql, cursor string, limit int) (res
 		})
 	}
 
-	if hdr := resp.Header.Get("Link"); hdr != "" {
-		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
-			return results, cur, nil
-		}
+	next, nerr := resolveNextCursor(resp.Header.Get("Link"), result.Links.Next)
+	if nerr != nil {
+		return results, "", nerr
 	}
-	return results, cursorFromNext(result.Links.Next), nil
+	return results, next, nil
 }
 
 type commentsResponse struct {
@@ -430,6 +429,12 @@ type commentsResponse struct {
 			AuthorID  string `json:"authorId"`
 			CreatedAt string `json:"createdAt"`
 		} `json:"version"`
+		// Inline-only fields; absent/empty for footer comments.
+		ResolutionStatus string `json:"resolutionStatus"`
+		Properties       struct {
+			InlineOriginalSelection string `json:"inlineOriginalSelection"`
+			InlineMarkerRef         string `json:"inlineMarkerRef"`
+		} `json:"properties"`
 		Links struct {
 			WebUI string `json:"webui"`
 		} `json:"_links"`
@@ -441,7 +446,7 @@ type commentsResponse struct {
 
 // getComments fetches one API page of comments from the given v2 sub-resource
 // ("footer-comments" or "inline-comments") and tags them with kind.
-func (c *client) getComments(ctx context.Context, pageID, resource, kind, cursor string, limit int) (comments []Comment, nextCursor string, err error) {
+func (c *client) getComments(ctx context.Context, pageID, resource, kind, cursor string, limit int, resolutionStatus string) (comments []Comment, nextCursor string, err error) {
 	if limit <= 0 {
 		limit = 25
 	}
@@ -450,6 +455,9 @@ func (c *client) getComments(ctx context.Context, pageID, resource, kind, cursor
 	query.Set("limit", fmt.Sprintf("%d", limit))
 	if cursor != "" {
 		query.Set("cursor", cursor)
+	}
+	if resolutionStatus != "" {
+		query.Set("resolution-status", resolutionStatus)
 	}
 
 	path := fmt.Sprintf("/wiki/api/v2/pages/%s/%s", pageID, resource)
@@ -477,29 +485,32 @@ func (c *client) getComments(ctx context.Context, pageID, resource, kind, cursor
 			webURL = c.baseURL + webURL
 		}
 		comments = append(comments, Comment{
-			ID:        r.ID,
-			Kind:      kind,
-			Body:      r.Body.Storage.Value,
-			AuthorID:  r.Version.AuthorID,
-			CreatedAt: r.Version.CreatedAt,
-			WebURL:    webURL,
+			ID:                r.ID,
+			Kind:              kind,
+			Body:              r.Body.Storage.Value,
+			AuthorID:          r.Version.AuthorID,
+			CreatedAt:         r.Version.CreatedAt,
+			WebURL:            webURL,
+			ResolutionStatus:  r.ResolutionStatus,
+			OriginalSelection: r.Properties.InlineOriginalSelection,
+			InlineMarkerRef:   r.Properties.InlineMarkerRef,
 		})
 	}
 
-	if hdr := resp.Header.Get("Link"); hdr != "" {
-		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
-			return comments, cur, nil
-		}
+	next, nerr := resolveNextCursor(resp.Header.Get("Link"), result.Links.Next)
+	if nerr != nil {
+		return comments, "", nerr
 	}
-	return comments, cursorFromNext(result.Links.Next), nil
+	return comments, next, nil
 }
 
 func (c *client) GetFooterComments(ctx context.Context, pageID, cursor string, limit int) ([]Comment, string, error) {
-	return c.getComments(ctx, pageID, "footer-comments", "footer", cursor, limit)
+	// Footer comments have no resolution status; always unfiltered.
+	return c.getComments(ctx, pageID, "footer-comments", "footer", cursor, limit, "")
 }
 
-func (c *client) GetInlineComments(ctx context.Context, pageID, cursor string, limit int) ([]Comment, string, error) {
-	return c.getComments(ctx, pageID, "inline-comments", "inline", cursor, limit)
+func (c *client) GetInlineComments(ctx context.Context, pageID, cursor string, limit int, resolutionStatus string) ([]Comment, string, error) {
+	return c.getComments(ctx, pageID, "inline-comments", "inline", cursor, limit, resolutionStatus)
 }
 
 // GetCommentChildren fetches one API page of direct replies to a comment. kind
@@ -546,21 +557,23 @@ func (c *client) GetCommentChildren(ctx context.Context, commentID, kind, cursor
 			webURL = c.baseURL + webURL
 		}
 		comments = append(comments, Comment{
-			ID:        r.ID,
-			Kind:      kind,
-			Body:      r.Body.Storage.Value,
-			AuthorID:  r.Version.AuthorID,
-			CreatedAt: r.Version.CreatedAt,
-			WebURL:    webURL,
+			ID:                r.ID,
+			Kind:              kind,
+			Body:              r.Body.Storage.Value,
+			AuthorID:          r.Version.AuthorID,
+			CreatedAt:         r.Version.CreatedAt,
+			WebURL:            webURL,
+			ResolutionStatus:  r.ResolutionStatus,
+			OriginalSelection: r.Properties.InlineOriginalSelection,
+			InlineMarkerRef:   r.Properties.InlineMarkerRef,
 		})
 	}
 
-	if hdr := resp.Header.Get("Link"); hdr != "" {
-		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
-			return comments, cur, nil
-		}
+	next, nerr := resolveNextCursor(resp.Header.Get("Link"), result.Links.Next)
+	if nerr != nil {
+		return comments, "", nerr
 	}
-	return comments, cursorFromNext(result.Links.Next), nil
+	return comments, next, nil
 }
 
 type labelsResponse struct {
@@ -608,12 +621,11 @@ func (c *client) GetLabels(ctx context.Context, pageID, cursor string, limit int
 		})
 	}
 
-	if hdr := resp.Header.Get("Link"); hdr != "" {
-		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
-			return labels, cur, nil
-		}
+	next, nerr := resolveNextCursor(resp.Header.Get("Link"), result.Links.Next)
+	if nerr != nil {
+		return labels, "", nerr
 	}
-	return labels, cursorFromNext(result.Links.Next), nil
+	return labels, next, nil
 }
 
 type spaceResponse struct {
@@ -824,6 +836,24 @@ func cursorFromNext(next string) string {
 	return u.Query().Get("cursor")
 }
 
+// nextCursor resolves the pagination cursor from the rel="next" Link header
+// (preferred) or the body's _links.next, whichever is present. It fails closed:
+// a nonempty next link that carries no usable cursor is a protocol error rather
+// than a silent end of results, so a drain used as a write precondition (the
+// inline-comment guard) cannot stop after one page on a malformed response.
+func resolveNextCursor(linkHeader, bodyNext string) (string, error) {
+	for _, candidate := range []string{parseLinkHeaderNext(linkHeader), bodyNext} {
+		if candidate == "" {
+			continue
+		}
+		if cur := cursorFromNext(candidate); cur != "" {
+			return cur, nil
+		}
+		return "", fmt.Errorf("%w: pagination next link %q has no cursor", ErrAPIError, candidate)
+	}
+	return "", nil
+}
+
 // ListPages returns exactly one API page of results for the space. Unlike
 // GetPages (the sync crawl), it does NOT resolve parents via N+1 lookups or add
 // synthetic parent nodes: parentId/parentType are decoded best-effort from the
@@ -864,14 +894,11 @@ func (c *client) ListPages(ctx context.Context, spaceID, cursor string, limit in
 		})
 	}
 
-	// Prefer the Link response header if present, else the body's _links.next.
-	next := result.Links.Next
-	if hdr := resp.Header.Get("Link"); hdr != "" {
-		if c := cursorFromNext(parseLinkHeaderNext(hdr)); c != "" {
-			return pages, c, nil
-		}
+	next, nerr := resolveNextCursor(resp.Header.Get("Link"), result.Links.Next)
+	if nerr != nil {
+		return pages, "", nerr
 	}
-	return pages, cursorFromNext(next), nil
+	return pages, next, nil
 }
 
 // parseLinkHeaderNext returns the URL of the rel="next" entry in an RFC 5988
@@ -949,13 +976,11 @@ func (c *client) ListChildren(ctx context.Context, pageID, cursor string, limit 
 		})
 	}
 
-	// Prefer the Link response header if present, else the body's _links.next.
-	if hdr := resp.Header.Get("Link"); hdr != "" {
-		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
-			return pages, cur, nil
-		}
+	next, nerr := resolveNextCursor(resp.Header.Get("Link"), result.Links.Next)
+	if nerr != nil {
+		return pages, "", nerr
 	}
-	return pages, cursorFromNext(result.Links.Next), nil
+	return pages, next, nil
 }
 
 type descendantsResponse struct {
@@ -1011,13 +1036,11 @@ func (c *client) GetDescendants(ctx context.Context, pageID, cursor string, limi
 		})
 	}
 
-	// Prefer the Link response header if present, else the body's _links.next.
-	if hdr := resp.Header.Get("Link"); hdr != "" {
-		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
-			return descendants, cur, nil
-		}
+	next, nerr := resolveNextCursor(resp.Header.Get("Link"), result.Links.Next)
+	if nerr != nil {
+		return descendants, "", nerr
 	}
-	return descendants, cursorFromNext(result.Links.Next), nil
+	return descendants, next, nil
 }
 
 type ancestorsResponse struct {
@@ -1073,9 +1096,12 @@ func (c *client) GetAncestors(ctx context.Context, pageID string) ([]Page, error
 		if next == "" {
 			break
 		}
+		// Fail closed on a malformed next link: this path is load-bearing for
+		// page-move cycle detection, so a silent stop must not masquerade as a
+		// complete ancestor chain.
 		nextURL, err := url.Parse(next)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("%w: malformed ancestors next link %q", ErrAPIError, next)
 		}
 		query = nextURL.Query()
 		path = nextURL.Path
@@ -1119,13 +1145,11 @@ func (c *client) ListSpaces(ctx context.Context, cursor string, limit int) (spac
 		spaces = append(spaces, Space(s))
 	}
 
-	// Prefer the Link response header if present, else the body's _links.next.
-	if hdr := resp.Header.Get("Link"); hdr != "" {
-		if cur := cursorFromNext(parseLinkHeaderNext(hdr)); cur != "" {
-			return spaces, cur, nil
-		}
+	next, nerr := resolveNextCursor(resp.Header.Get("Link"), result.Links.Next)
+	if nerr != nil {
+		return spaces, "", nerr
 	}
-	return spaces, cursorFromNext(result.Links.Next), nil
+	return spaces, next, nil
 }
 
 func (c *client) getPageParent(ctx context.Context, pageID string) (parentID, parentType string, err error) {
@@ -1208,6 +1232,8 @@ type pageDetailResponse struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	SpaceID   string `json:"spaceId"`
+	Status    string `json:"status"`
+	ParentID  string `json:"parentId"`
 	AuthorID  string `json:"authorId"`
 	CreatedAt string `json:"createdAt"`
 	Subtype   string `json:"subtype"`
@@ -1277,6 +1303,8 @@ func (c *client) GetPage(ctx context.Context, pageID string, format APIBodyForma
 		ID:         result.ID,
 		Title:      result.Title,
 		SpaceID:    result.SpaceID,
+		Status:     result.Status,
+		ParentID:   result.ParentID,
 		Version:    result.Version.Number,
 		AuthorID:   result.AuthorID,
 		CreatedAt:  result.CreatedAt,
@@ -1570,14 +1598,11 @@ func (c *client) CreatePage(ctx context.Context, p CreatePageParams) (*PageRecor
 }
 
 func (c *client) UpdatePage(ctx context.Context, p UpdatePageParams) (*PageRecord, error) {
-	status := p.Status
-	if status == "" {
-		status = "current"
-	}
-
+	// Status is preserved verbatim by the caller; do not default it here (that
+	// would silently change a draft to current).
 	payload := map[string]any{
 		"id":     p.ID,
-		"status": status,
+		"status": p.Status,
 		"title":  p.Title,
 		"version": map[string]any{
 			"number": p.Version,
@@ -1587,11 +1612,24 @@ func (c *client) UpdatePage(ctx context.Context, p UpdatePageParams) (*PageRecor
 			Value:          p.Body.Value,
 		},
 	}
+	// Reparent only when explicitly requested; nil leaves parentId out so an
+	// ordinary update never moves the page.
+	if p.ParentID != nil {
+		payload["parentId"] = *p.ParentID
+	}
 
 	resp, err := c.doJSON(ctx, http.MethodPut, fmt.Sprintf("/wiki/api/v2/pages/%s", p.ID), nil, payload)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, ErrPageNotFound
+		}
+		// A 409 from the update itself is a concurrent-edit conflict. Retag the
+		// StatusError's sentinel so callers get a stable version_conflict while
+		// preserving the endpoint and upstream message.
+		var se *StatusError
+		if errors.As(err, &se) && se.StatusCode == http.StatusConflict {
+			se.Err = ErrVersionConflict
+			return nil, se
 		}
 		return nil, err
 	}

@@ -18,14 +18,44 @@ type CommentCmd struct {
 // inline comments; --footer or --inline narrow to a single kind. Each kind is
 // fully drained (comment counts per page are bounded), so no cursor is emitted.
 type CommentListCmd struct {
-	Page           string `arg:"" name:"id-or-url" help:"Page ID or URL."`
-	Footer         bool   `help:"Only footer comments."`
-	Inline         bool   `help:"Only inline comments."`
-	Replies        bool   `help:"Also fetch replies (recursively), each with a parent_id linking to its parent."`
-	ResolveAuthors bool   `name:"resolve-authors" help:"Resolve author_id to an author_name sibling (best-effort, one cached user lookup per unique author)."`
+	Page             string `arg:"" name:"id-or-url" help:"Page ID or URL."`
+	Footer           bool   `help:"Only footer comments."`
+	Inline           bool   `help:"Only inline comments."`
+	ResolutionStatus string `name:"resolution-status" help:"Filter inline comments by resolution status: open|reopened|resolved|dangling. Implies --inline."`
+	Replies          bool   `help:"Also fetch replies (recursively), each with a parent_id linking to its parent."`
+	ResolveAuthors   bool   `name:"resolve-authors" help:"Resolve author_id to an author_name sibling (best-effort, one cached user lookup per unique author)."`
+}
+
+// validResolutionStatuses are the inline-comment resolution statuses the API
+// accepts as a filter value.
+var validResolutionStatuses = map[string]bool{
+	"open": true, "reopened": true, "resolved": true, "dangling": true,
 }
 
 func (c *CommentListCmd) Run(cli *CLI) error {
+	// Validate the resolution-status filter locally, before any auth or network.
+	// It only applies to inline comments, so it implies inline-only and conflicts
+	// with --footer.
+	if c.ResolutionStatus != "" {
+		if !validResolutionStatuses[c.ResolutionStatus] {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "unknown --resolution-status",
+				Hint:   "Use open, reopened, resolved, or dangling.",
+				Code:   output.ExitGeneral,
+			}
+		}
+		if c.Footer {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "--resolution-status applies to inline comments and cannot combine with --footer",
+				Hint:   "Drop --footer (or pass --inline).",
+				Code:   output.ExitGeneral,
+			}
+		}
+		c.Inline = true
+	}
+
 	siteHint, pageID, err := resolvePageRef(cli, c.Page)
 	if err != nil {
 		return err
@@ -58,6 +88,13 @@ func (c *CommentListCmd) Run(cli *CLI) error {
 			"author_id":  cm.AuthorID,
 			"created_at": cm.CreatedAt,
 			"web_url":    cm.WebURL,
+		}
+		// Inline-only anchor fields. Emitted (even when empty) on inline rows so
+		// missing/unknown state is visible; omitted entirely for footer rows.
+		if cm.Kind == "inline" {
+			row["resolution_status"] = cm.ResolutionStatus
+			row["original_selection"] = cm.OriginalSelection
+			row["inline_marker_ref"] = cm.InlineMarkerRef
 		}
 		if parentID != "" {
 			row["parent_id"] = parentID
@@ -122,7 +159,10 @@ func (c *CommentListCmd) Run(cli *CLI) error {
 		}
 	}
 	if wantInline {
-		if err := drain(client.GetInlineComments); err != nil {
+		inline := func(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Comment, string, error) {
+			return client.GetInlineComments(ctx, pageID, cursor, limit, c.ResolutionStatus)
+		}
+		if err := drain(inline); err != nil {
 			return err
 		}
 	}

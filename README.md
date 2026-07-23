@@ -6,7 +6,7 @@ commands are non-interactive and scriptable, built for LLM agents and CI.
 
 The read and write surface ships today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
-`page tree`, `page create`, `page update`, `page delete`, `page convert-to-live`,
+`page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`,
 `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
@@ -291,17 +291,47 @@ printf '<p>Hello</p>' | confluence page create --space ENG --title "Team Notes" 
 ### page update
 
 Update a page under optimistic concurrency. `--if-version` is the version you
-expect to be current; a mismatch fails with a recoverable `version_conflict` and
-writes nothing. On success the page is written at version `n+1`. Omitting
-`--title` preserves the title; omitting the body preserves the body. The row
-carries `id`, `title`, `version`, `previous_version`, and `web_url`.
+expect to be current; a mismatch (at preflight or a PUT-time 409) fails with a
+recoverable `version_conflict` and writes nothing. On success the page is written
+at version `n+1`. Passing neither `--title` nor a body is `invalid_input`.
+Omitting `--title` preserves the title; omitting the body preserves the body as
+its exact ADF (and the page status). A title-only update whose title is unchanged
+is a no-op (`updated:false`, no write). The row carries `id`, `title`, `version`,
+`previous_version`, `updated`, and `web_url`.
 
 ```bash
 printf '<p>Revised.</p>' | confluence page update 123456 --if-version 5 --body-format storage
 ```
 
 ```jsonl
-{"id":"123456","title":"API Design","version":6,"previous_version":5,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"id":"123456","title":"API Design","version":6,"previous_version":5,"updated":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"_meta":{"has_more":false}}
+```
+
+Piping a NEW body is refused with `unresolved_inline_comments` when the page has
+any inline comment that is not `resolved`, since replacing the body would destroy
+the comment's anchor. The error lists the blocking comments in its `data` object
+and writes nothing. Inspect them with `confluence comment list <page> --inline`,
+resolve or re-anchor them in Confluence, then retry -- or pass
+`--allow-unresolved-inline-comments` to override (it skips only the inspection). A
+title-only update (no piped body) re-sends the exact ADF and is not guarded.
+
+### page move
+
+Reparent a page under a different parent within the same space, preserving the
+page ID, history, comments, and attachments. `--if-version` guards the source
+version. A cross-space destination is refused with `cross_space_move_unsupported`
+(the v2 API cannot move across spaces -- use the Confluence UI); self-parenting
+and cycles are `invalid_move`. Already-a-child returns `moved:false` with no
+write. A move re-sends the exact ADF and touches only the parent, so it does not
+disturb inline-comment anchors.
+
+```bash
+confluence page move 123456 --parent 200000 --if-version 5
+```
+
+```jsonl
+{"id":"123456","title":"API Design","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
 {"_meta":{"has_more":false}}
 ```
 
@@ -413,16 +443,20 @@ confluence search 'label = on-call' --all
 List a page's comments (numeric id or page URL). Footer and inline comments are
 fully drained, so there is no cursor. `--footer` and `--inline` narrow to one
 kind; without either, both are emitted. Rows carry `id`, `kind`
-(`footer`/`inline`), `body`, `author_id`, `created_at`, and `web_url`. A missing
-page is a fatal `page_not_found`.
+(`footer`/`inline`), `body`, `author_id`, `created_at`, and `web_url`; inline
+rows also carry `resolution_status`, `original_selection`, and
+`inline_marker_ref`. A missing page is a fatal `page_not_found`.
 
-`--replies` drains each comment's reply thread recursively and emits the replies
-after their parent, each with a `parent_id` pointing at its immediate parent.
-`--resolve-authors` adds an `author_name` sibling (best-effort, cached).
+`--resolution-status open|reopened|resolved|dangling` filters inline comments by
+status (implies `--inline`, conflicts with `--footer`). `--replies` drains each
+comment's reply thread recursively and emits the replies after their parent, each
+with a `parent_id` pointing at its immediate parent. `--resolve-authors` adds an
+`author_name` sibling (best-effort, cached).
 
 ```bash
 confluence comment list 123456
 confluence comment list 123456 --inline
+confluence comment list 123456 --resolution-status open
 confluence comment list 123456 --replies
 confluence comment list 123456 --resolve-authors
 ```
@@ -450,7 +484,7 @@ printf '<p>Looks good to me.</p>' | confluence comment add 123456 --body-format 
 ```
 
 `--inline` anchors the comment to on-page text via `--selection-text <text>`.
-When that text occurs more than once, `--match-index N` (1-based) selects which
+When that text occurs more than once, `--match-index N` (0-based) selects which
 occurrence and `--match-count N` asserts the expected number of occurrences.
 Inline rows carry `kind:"inline"` and `selection_text`.
 

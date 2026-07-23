@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -23,6 +25,7 @@ type PageCmd struct {
 	Tree          PageTreeCmd          `cmd:"" help:"Print a space's page hierarchy (ordered by ID, not display order)."`
 	Create        PageCreateCmd        `cmd:"" help:"Create a page."`
 	Update        PageUpdateCmd        `cmd:"" help:"Update a page (optimistic concurrency)."`
+	Move          PageMoveCmd          `cmd:"" help:"Reparent a page within its space (optimistic concurrency)."`
 	Delete        PageDeleteCmd        `cmd:"" help:"Delete pages (moves to trash)."`
 	ConvertToLive PageConvertToLiveCmd `cmd:"" name:"convert-to-live" help:"Convert pages to live docs (undocumented endpoint; no supported undo)."`
 }
@@ -748,19 +751,15 @@ func (c *PageCreateCmd) Run(cli *CLI) error {
 }
 
 type PageUpdateCmd struct {
-	Ref        string `arg:"" name:"id-or-url" help:"Page ID or URL."`
-	IfVersion  int    `name:"if-version" required:"" help:"Expected current version; the update is rejected if it differs."`
-	Title      string `help:"New title (keeps current if omitted)."`
-	BodyFormat string `help:"storage, adf, or markdown (required when piping a body)."`
+	Ref                           string `arg:"" name:"id-or-url" help:"Page ID or URL."`
+	IfVersion                     int    `name:"if-version" required:"" help:"Expected current version; the update is rejected if it differs."`
+	Title                         string `help:"New title (keeps current if omitted)."`
+	BodyFormat                    string `help:"storage, adf, or markdown (required when piping a body)."`
+	AllowUnresolvedInlineComments bool   `name:"allow-unresolved-inline-comments" help:"Proceed even if the page has unresolved inline comments whose anchors this write may destroy. Skips the inline-comment inspection entirely; does not bypass --if-version or other checks."`
 }
 
 func (c *PageUpdateCmd) Run(cli *CLI) error {
 	siteHint, pageID, err := resolvePageRef(cli, c.Ref)
-	if err != nil {
-		return err
-	}
-
-	client, _, err := cli.NewClientForSite(siteHint)
 	if err != nil {
 		return err
 	}
@@ -770,12 +769,30 @@ func (c *PageUpdateCmd) Run(cli *CLI) error {
 		return err
 	}
 
+	// Reject a no-op invocation up front (before auth/network): with neither a
+	// new title nor a body there is nothing to change, and a blind re-send would
+	// bump the version for no reason.
+	if body == nil && c.Title == "" {
+		return &output.Error{
+			Err:    "invalid_input",
+			Detail: "nothing to update: pass --title and/or pipe a body",
+			Hint:   "Set --title, or pipe a body with --body-format storage|adf|markdown.",
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
 	ctx, cancel := cli.Context()
 	defer cancel()
 
-	// Preflight: fetch the current page to enforce optimistic concurrency and to
-	// preserve the existing body when none was piped.
-	cur, err := client.GetPage(ctx, pageID, confluence.BodyFormatStorage)
+	// Preflight: fetch as ADF so a no-body update preserves the body as ADF (not
+	// a lossy storage round-trip), and so we preserve title/status/version.
+	cur, err := client.GetPage(ctx, pageID, confluence.BodyFormatAtlasDoc)
 	if err != nil {
 		return cli.ClassifyError(err)
 	}
@@ -793,14 +810,59 @@ func (c *PageUpdateCmd) Run(cli *CLI) error {
 	if newTitle == "" {
 		newTitle = cur.Title
 	}
-	wb := confluence.WriteBody{Representation: confluence.BodyFormatStorage, Value: cur.Body}
+
+	p := cli.NewPrinter()
+
+	// A title-only update whose title matches the current title is a provable
+	// no-op: emit success without a PUT so the version does not move.
+	if body == nil && newTitle == cur.Title {
+		row := map[string]any{
+			"id":               cur.ID,
+			"title":            cur.Title,
+			"version":          cur.Version,
+			"previous_version": c.IfVersion,
+			"updated":          false,
+			"web_url":          cur.WebURL,
+		}
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+		return p.PrintMeta(output.Meta{})
+	}
+
+	// Choose the body to send: the caller's when piped, else the current ADF
+	// preserved unchanged. Fail closed if the ADF body is missing (never legal
+	// for a real page) rather than clobbering the page with an empty body.
+	wb := confluence.WriteBody{Representation: confluence.BodyFormatAtlasDoc, Value: cur.Body}
 	if body != nil {
 		wb = *body
+	} else if strings.TrimSpace(cur.Body) == "" {
+		return &output.Error{
+			Err:    "api_error",
+			Detail: "page returned no atlas_doc_format body to preserve",
+			Hint:   "Retry; if it persists the page body could not be fetched as ADF for preservation.",
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+
+	// Inline-comment guard: only a caller-supplied replacement body can destroy
+	// anchors. A no-body update re-sends the exact current ADF, which a live
+	// scratch-page test confirmed preserves inline-comment marks, so it is not
+	// guarded. The guard is the last remote precondition before the PUT, to
+	// shrink the window in which a comment is added after inspection. Skipped
+	// with the explicit override (which skips the request entirely, so an
+	// inspection outage does not block an overridden write).
+	if body != nil && !c.AllowUnresolvedInlineComments {
+		if err := guardInlineComments(ctx, cli, client, pageID, cur.WebURL, c.Ref); err != nil {
+			return err
+		}
 	}
 
 	rec, err := client.UpdatePage(ctx, confluence.UpdatePageParams{
 		ID:      pageID,
 		Title:   newTitle,
+		Status:  cur.Status,
 		Version: c.IfVersion + 1,
 		Body:    wb,
 	})
@@ -808,13 +870,293 @@ func (c *PageUpdateCmd) Run(cli *CLI) error {
 		return cli.ClassifyError(err)
 	}
 
-	p := cli.NewPrinter()
 	row := map[string]any{
 		"id":               rec.ID,
 		"title":            rec.Title,
 		"version":          rec.Version,
 		"previous_version": c.IfVersion,
+		"updated":          true,
 		"web_url":          rec.WebURL,
+	}
+	if err := p.PrintItem(row); err != nil {
+		return err
+	}
+	return p.PrintMeta(output.Meta{})
+}
+
+// guardInlineComments refuses a body-replacing write when the page has any
+// inline comment that is not exactly "resolved" (open, reopened, dangling, or
+// any unknown/future status all block). It fails closed: a failure to inspect
+// the comments refuses the write. The caller skips this only via the explicit
+// override.
+func guardInlineComments(ctx context.Context, cli *CLI, client confluence.Client, pageID, pageURL, input string) error {
+	comments, err := drainInlineComments(ctx, client, pageID)
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+	blockers := unresolvedBlockers(comments, pageURL)
+	if len(blockers) == 0 {
+		return nil
+	}
+	return &output.Error{
+		Err:    "unresolved_inline_comments",
+		Detail: fmt.Sprintf("refusing to replace the page body: %d inline comment(s) are not resolved and this write may destroy their anchors", len(blockers)),
+		Hint:   "Resolve or re-anchor the comments in Confluence (see the web URLs), then retry. Pass --allow-unresolved-inline-comments to override.",
+		Input:  input,
+		Data: map[string]any{
+			"page_id":                pageID,
+			"blocking_comment_count": len(blockers),
+			"blocking_comments":      blockers,
+		},
+		Code: output.ExitGeneral,
+	}
+}
+
+// drainInlineComments fully drains a page's top-level inline comments
+// (unfiltered), detecting a repeated cursor so a malformed API response cannot
+// loop forever. The larger page size shrinks the time-of-check/time-of-use
+// window before the write.
+func drainInlineComments(ctx context.Context, client confluence.Client, pageID string) ([]confluence.Comment, error) {
+	var all []confluence.Comment
+	seen := make(map[string]bool)
+	cursor := ""
+	for {
+		batch, next, err := client.GetInlineComments(ctx, pageID, cursor, 250, "")
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, batch...)
+		if next == "" {
+			return all, nil
+		}
+		if seen[next] {
+			return nil, fmt.Errorf("%w: repeated inline-comment pagination cursor", confluence.ErrAPIError)
+		}
+		seen[next] = true
+		cursor = next
+	}
+}
+
+// unresolvedBlockers returns the inline comments that are not exactly
+// "resolved", deduplicated by id and sorted by id for deterministic output.
+func unresolvedBlockers(comments []confluence.Comment, pageURL string) []map[string]any {
+	byID := make(map[string]confluence.Comment)
+	for _, cm := range comments {
+		if cm.ResolutionStatus == "resolved" {
+			continue
+		}
+		byID[cm.ID] = cm
+	}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		cm := byID[id]
+		out = append(out, map[string]any{
+			"id":                 cm.ID,
+			"resolution_status":  cm.ResolutionStatus,
+			"original_selection": cm.OriginalSelection,
+			"inline_marker_ref":  cm.InlineMarkerRef,
+			"web_url":            commentFocusURL(cm, pageURL),
+		})
+	}
+	return out
+}
+
+// commentFocusURL returns the comment's own web URL, or a best-effort fallback
+// that focuses the comment on the page URL. Returns "" when neither is known.
+func commentFocusURL(cm confluence.Comment, pageURL string) string {
+	if cm.WebURL != "" {
+		return cm.WebURL
+	}
+	if pageURL == "" {
+		return ""
+	}
+	u, err := url.Parse(pageURL)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	q.Set("focusedCommentId", cm.ID)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+type PageMoveCmd struct {
+	Ref       string `arg:"" name:"id-or-url" help:"Source page ID or URL."`
+	Parent    string `required:"" help:"Destination parent page ID or URL (must be in the same space)."`
+	IfVersion int    `name:"if-version" required:"" help:"Expected current version of the source page; the move is rejected if it differs."`
+}
+
+func (c *PageMoveCmd) Run(cli *CLI) error {
+	if c.IfVersion <= 0 {
+		return &output.Error{
+			Err:    "invalid_input",
+			Detail: "--if-version must be a positive version number",
+			Hint:   "Fetch the source page with 'confluence page get <id>' and pass its version.",
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+
+	// Resolve both refs symmetrically. resolvePageRef enforces --site matching for
+	// URL refs; here we also reject two URLs that point at different sites.
+	srcSite, srcID, err := resolvePageRef(cli, c.Ref)
+	if err != nil {
+		return err
+	}
+	dstSite, dstID, err := resolvePageRef(cli, c.Parent)
+	if err != nil {
+		return err
+	}
+	if srcSite != "" && dstSite != "" && srcSite != dstSite {
+		return &output.Error{
+			Err:    "invalid_input",
+			Detail: "source and destination are on different sites",
+			Hint:   "Both refs must be on one site; a cross-site move is not possible.",
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+	siteHint := srcSite
+	if siteHint == "" {
+		siteHint = dstSite
+	}
+
+	// Self-parenting is invalid regardless of any remote state.
+	if dstID == srcID {
+		return &output.Error{
+			Err:    "invalid_move",
+			Detail: "a page cannot be its own parent",
+			Hint:   "Pass a different destination parent.",
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	// Fetch the source as ADF so the reparent PUT preserves the body exactly.
+	src, err := client.GetPage(ctx, srcID, confluence.BodyFormatAtlasDoc)
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+	if src.Version != c.IfVersion {
+		return &output.Error{
+			Err:    "version_conflict",
+			Detail: fmt.Sprintf("expected current version %d, got %d", c.IfVersion, src.Version),
+			Hint:   fmt.Sprintf("Fetch the latest with 'confluence page get %s' and retry with --if-version %d.", srcID, src.Version),
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+	if strings.TrimSpace(src.Body) == "" {
+		return &output.Error{
+			Err:    "api_error",
+			Detail: "source page returned no atlas_doc_format body to preserve",
+			Hint:   "Retry; if it persists the page body could not be fetched as ADF for preservation.",
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+
+	// Fetch the destination parent to compare spaces and confirm it exists.
+	dst, err := client.GetPage(ctx, dstID, confluence.BodyFormatStorage)
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+	if src.SpaceID != dst.SpaceID {
+		return &output.Error{
+			Err:    "cross_space_move_unsupported",
+			Detail: fmt.Sprintf("source page is in space %s but destination parent is in space %s; the Confluence v2 API only reparents within one space", src.SpaceID, dst.SpaceID),
+			Hint:   "Open the source page in Confluence and use the Move action to move it across spaces.",
+			Input:  c.Ref,
+			Data: map[string]any{
+				"source_page_id":       srcID,
+				"source_space_id":      src.SpaceID,
+				"source_web_url":       src.WebURL,
+				"destination_page_id":  dstID,
+				"destination_space_id": dst.SpaceID,
+				"destination_web_url":  dst.WebURL,
+			},
+			Code: output.ExitGeneral,
+		}
+	}
+
+	p := cli.NewPrinter()
+
+	// Already under the destination parent: idempotent success, no PUT (the
+	// version check above still guards against a stale retry).
+	if src.ParentID == dstID {
+		row := map[string]any{
+			"id":               src.ID,
+			"title":            src.Title,
+			"space_id":         src.SpaceID,
+			"parent_id":        dstID,
+			"previous_version": c.IfVersion,
+			"version":          src.Version,
+			"moved":            false,
+			"web_url":          src.WebURL,
+		}
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+		return p.PrintMeta(output.Meta{})
+	}
+
+	// Reject a cycle: the destination must not be a descendant of the source.
+	// Fail closed if ancestry cannot be inspected.
+	ancestors, err := client.GetAncestors(ctx, dstID)
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+	for _, a := range ancestors {
+		if a.ID == srcID {
+			return &output.Error{
+				Err:    "invalid_move",
+				Detail: "destination parent is a descendant of the source page (move would create a cycle)",
+				Hint:   "Pick a destination that is not under the page being moved.",
+				Input:  c.Ref,
+				Code:   output.ExitGeneral,
+			}
+		}
+	}
+
+	// No inline-comment guard: a move re-sends the source's exact ADF and changes
+	// only parentId. A live scratch-page test confirmed this preserves inline
+	// comment anchors (marker ref and resolution status), so a move cannot
+	// destroy them.
+	rec, err := client.UpdatePage(ctx, confluence.UpdatePageParams{
+		ID:       srcID,
+		Title:    src.Title,
+		Status:   src.Status,
+		Version:  c.IfVersion + 1,
+		Body:     confluence.WriteBody{Representation: confluence.BodyFormatAtlasDoc, Value: src.Body},
+		ParentID: &dstID,
+	})
+	if err != nil {
+		return cli.ClassifyError(err)
+	}
+
+	row := map[string]any{
+		"id":                 rec.ID,
+		"title":              rec.Title,
+		"space_id":           src.SpaceID,
+		"previous_parent_id": src.ParentID,
+		"parent_id":          dstID,
+		"previous_version":   c.IfVersion,
+		"version":            rec.Version,
+		"moved":              true,
+		"web_url":            rec.WebURL,
 	}
 	if err := p.PrintItem(row); err != nil {
 		return err

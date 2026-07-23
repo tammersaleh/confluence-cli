@@ -29,7 +29,7 @@ func commentServer(t *testing.T) *httptest.Server {
 			next := srv.URL + "/wiki/api/v2/pages/123/footer-comments?cursor=F2"
 			_, _ = w.Write([]byte(`{"results":[{"id":"f1","body":{"storage":{"value":"<p>one</p>"}},"version":{"authorId":"u1","createdAt":"t1"},"_links":{"webui":"/w/f1"}}],"_links":{"next":"` + next + `"}}`))
 		case "/wiki/api/v2/pages/123/inline-comments":
-			_, _ = w.Write([]byte(`{"results":[{"id":"i1","body":{"storage":{"value":"<p>inline</p>"}},"version":{"authorId":"u3","createdAt":"t3"},"_links":{"webui":"/w/i1"}}],"_links":{"next":""}}`))
+			_, _ = w.Write([]byte(`{"results":[{"id":"i1","body":{"storage":{"value":"<p>inline</p>"}},"version":{"authorId":"u3","createdAt":"t3"},"resolutionStatus":"open","properties":{"inlineOriginalSelection":"anchored text","inlineMarkerRef":"m1"},"_links":{"webui":"/w/i1"}}],"_links":{"next":""}}`))
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -71,6 +71,16 @@ func TestCommentList_BothDrained(t *testing.T) {
 	if lines[2]["id"] != "i1" || lines[2]["kind"] != "inline" {
 		t.Errorf("third row should be inline: %v", lines[2])
 	}
+	// Inline row carries the anchor fields.
+	if lines[2]["resolution_status"] != "open" || lines[2]["original_selection"] != "anchored text" || lines[2]["inline_marker_ref"] != "m1" {
+		t.Errorf("inline row missing anchor fields: %v", lines[2])
+	}
+	// Footer rows omit the inline-only fields.
+	for _, k := range []string{"resolution_status", "original_selection", "inline_marker_ref"} {
+		if _, ok := lines[0][k]; ok {
+			t.Errorf("footer row should omit %q: %v", k, lines[0])
+		}
+	}
 	if lines[0]["body"] != "<p>one</p>" || lines[0]["author_id"] != "u1" || lines[0]["created_at"] != "t1" {
 		t.Errorf("footer row fields unexpected: %v", lines[0])
 	}
@@ -106,6 +116,74 @@ func TestCommentList_FooterOnly(t *testing.T) {
 		if lines[i]["id"] != id || lines[i]["kind"] != "footer" {
 			t.Errorf("row %d unexpected: %v", i, lines[i])
 		}
+	}
+}
+
+// resolutionFilterServer records the inline-comments query and serves one row.
+func resolutionFilterServer(t *testing.T, gotQuery *string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/wiki/api/v2/pages/123/inline-comments" {
+			t.Errorf("resolution-status filter must hit inline-comments only, got %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		*gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"results":[{"id":"i1","body":{"storage":{"value":"<p>x</p>"}},"version":{"authorId":"u3"},"resolutionStatus":"open","properties":{"inlineOriginalSelection":"a","inlineMarkerRef":"m1"}}],"_links":{"next":""}}`))
+	}))
+}
+
+func TestCommentList_ResolutionStatusImpliesInline(t *testing.T) {
+	clearCredEnv(t)
+	var gotQuery string
+	server := resolutionFilterServer(t, &gotQuery)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &CommentListCmd{Page: "123", ResolutionStatus: "open"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !strings.Contains(gotQuery, "resolution-status=open") {
+		t.Errorf("query = %q, want resolution-status=open", gotQuery)
+	}
+}
+
+func TestCommentList_ResolutionStatusInvalid(t *testing.T) {
+	clearCredEnv(t)
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &CommentListCmd{Page: "123", ResolutionStatus: "bogus"}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "invalid_input" {
+		t.Fatalf("expected invalid_input, got %v", err)
+	}
+}
+
+func TestCommentList_ResolutionStatusConflictsWithFooter(t *testing.T) {
+	clearCredEnv(t)
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+
+	cmd := &CommentListCmd{Page: "123", ResolutionStatus: "open", Footer: true}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "invalid_input" {
+		t.Fatalf("expected invalid_input for --footer conflict, got %v", err)
 	}
 }
 

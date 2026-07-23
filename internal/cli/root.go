@@ -253,6 +253,13 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Hint:   "The resource or endpoint was not found. For 'page convert-to-live', the undocumented endpoint may have moved or been disabled.",
 			Code:   output.ExitGeneral,
 		}
+	case errors.Is(err, confluence.ErrVersionConflict):
+		oErr = &output.Error{
+			Err:    "version_conflict",
+			Detail: err.Error(),
+			Hint:   "Another edit landed first. Fetch the latest with 'confluence page get <id>' and retry with the new --if-version.",
+			Code:   output.ExitGeneral,
+		}
 	case errors.Is(err, confluence.ErrLiveConvertFailed):
 		oErr = &output.Error{
 			Err:    "live_convert_failed",
