@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.0](https://github.com/tammersaleh/confluence-cli/compare/v2.1.0...v2.2.0) (2026-07-23)
+
+
+### Features
+
+* **output:** add optional data object to fatal errors ([1ca62fc](https://github.com/tammersaleh/confluence-cli/commit/1ca62fcfd0bd39b8af7db56dcca2fdfd8ee5512b))
+* **page:** guard inline-comment destruction, preserve ADF, add page move ([dafec15](https://github.com/tammersaleh/confluence-cli/commit/dafec15d85bc74b48af5774c592d2e22ea3805ab))
+
 ## [2.1.0](https://github.com/tammersaleh/confluence-cli/compare/v2.0.0...v2.1.0) (2026-07-21)
 
 
