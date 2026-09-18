@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/tammersaleh/confluence-cli/compare/v2.2.0...v2.3.0) (2026-09-18)
+
+
+### Features
+
+* **page:** move pages across spaces, emit parent fields on page get ([3cd9a47](https://github.com/tammersaleh/confluence-cli/commit/3cd9a47800075c5f4ade49b5762e1d6a90a6153c))
+
 ## [2.2.0](https://github.com/tammersaleh/confluence-cli/compare/v2.1.0...v2.2.0) (2026-07-23)
 
 
