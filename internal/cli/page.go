@@ -25,7 +25,7 @@ type PageCmd struct {
 	Tree          PageTreeCmd          `cmd:"" help:"Print a space's page hierarchy (ordered by ID, not display order)."`
 	Create        PageCreateCmd        `cmd:"" help:"Create a page."`
 	Update        PageUpdateCmd        `cmd:"" help:"Update a page (optimistic concurrency)."`
-	Move          PageMoveCmd          `cmd:"" help:"Reparent a page within its space (optimistic concurrency)."`
+	Move          PageMoveCmd          `cmd:"" help:"Move a page under a new parent, in the same space or another space (optimistic concurrency)."`
 	Delete        PageDeleteCmd        `cmd:"" help:"Delete pages (moves to trash)."`
 	ConvertToLive PageConvertToLiveCmd `cmd:"" name:"convert-to-live" help:"Convert pages to live docs (undocumented endpoint; no supported undo)."`
 }
@@ -514,12 +514,19 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 			"id":          pd.ID,
 			"title":       pd.Title,
 			"space_id":    pd.SpaceID,
+			"status":      pd.Status,
 			"version":     pd.Version,
 			"author_id":   pd.AuthorID,
 			"created_at":  pd.CreatedAt,
 			"modified_at": pd.ModifiedAt,
 			"web_url":     pd.WebURL,
 			"body_format": string(pd.BodyFormat),
+		}
+		if pd.ParentID != "" {
+			row["parent_id"] = pd.ParentID
+		}
+		if pd.ParentType != "" {
+			row["parent_type"] = pd.ParentType
 		}
 		if pd.Subtype != "" {
 			row["subtype"] = pd.Subtype
@@ -987,7 +994,7 @@ func commentFocusURL(cm confluence.Comment, pageURL string) string {
 
 type PageMoveCmd struct {
 	Ref       string `arg:"" name:"id-or-url" help:"Source page ID or URL."`
-	Parent    string `required:"" help:"Destination parent page ID or URL (must be in the same space)."`
+	Parent    string `required:"" help:"Destination parent page ID or URL (same space or another space)."`
 	IfVersion int    `name:"if-version" required:"" help:"Expected current version of the source page; the move is rejected if it differs."`
 }
 
@@ -1059,38 +1066,12 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 			Code:   output.ExitGeneral,
 		}
 	}
-	if strings.TrimSpace(src.Body) == "" {
-		return &output.Error{
-			Err:    "api_error",
-			Detail: "source page returned no atlas_doc_format body to preserve",
-			Hint:   "Retry; if it persists the page body could not be fetched as ADF for preservation.",
-			Input:  c.Ref,
-			Code:   output.ExitGeneral,
-		}
-	}
-
-	// Fetch the destination parent to compare spaces and confirm it exists.
+	// Fetch the destination parent to confirm it exists and learn its space.
 	dst, err := client.GetPage(ctx, dstID, confluence.BodyFormatStorage)
 	if err != nil {
 		return cli.ClassifyError(err)
 	}
-	if src.SpaceID != dst.SpaceID {
-		return &output.Error{
-			Err:    "cross_space_move_unsupported",
-			Detail: fmt.Sprintf("source page is in space %s but destination parent is in space %s; the Confluence v2 API only reparents within one space", src.SpaceID, dst.SpaceID),
-			Hint:   "Open the source page in Confluence and use the Move action to move it across spaces.",
-			Input:  c.Ref,
-			Data: map[string]any{
-				"source_page_id":       srcID,
-				"source_space_id":      src.SpaceID,
-				"source_web_url":       src.WebURL,
-				"destination_page_id":  dstID,
-				"destination_space_id": dst.SpaceID,
-				"destination_web_url":  dst.WebURL,
-			},
-			Code: output.ExitGeneral,
-		}
-	}
+	crossSpace := src.SpaceID != dst.SpaceID
 
 	p := cli.NewPrinter()
 
@@ -1098,14 +1079,15 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 	// version check above still guards against a stale retry).
 	if src.ParentID == dstID {
 		row := map[string]any{
-			"id":               src.ID,
-			"title":            src.Title,
-			"space_id":         src.SpaceID,
-			"parent_id":        dstID,
-			"previous_version": c.IfVersion,
-			"version":          src.Version,
-			"moved":            false,
-			"web_url":          src.WebURL,
+			"id":                src.ID,
+			"title":             src.Title,
+			"previous_space_id": src.SpaceID,
+			"space_id":          src.SpaceID,
+			"parent_id":         dstID,
+			"previous_version":  c.IfVersion,
+			"version":           src.Version,
+			"moved":             false,
+			"web_url":           src.WebURL,
 		}
 		if err := p.PrintItem(row); err != nil {
 			return err
@@ -1131,6 +1113,45 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 		}
 	}
 
+	row := map[string]any{
+		"id":                 src.ID,
+		"title":              src.Title,
+		"previous_space_id":  src.SpaceID,
+		"space_id":           dst.SpaceID,
+		"previous_parent_id": src.ParentID,
+		"parent_id":          dstID,
+		"previous_version":   c.IfVersion,
+		"moved":              true,
+	}
+
+	if crossSpace {
+		// The v2 update endpoint refuses to change spaceId on a published page
+		// ("Only DRAFT pages can be moved between spaces"). The v1 move endpoint
+		// is the only public API for this. It leaves the body untouched (so
+		// inline-comment anchors are safe) and does NOT bump the version, so
+		// --if-version is enforced only by the preflight above, not at write
+		// time. Attachments follow the page (verified live).
+		if err := client.MovePage(ctx, srcID, confluence.MoveAppend, dstID); err != nil {
+			return cli.ClassifyError(err)
+		}
+		row["version"] = src.Version
+		row["web_url"] = src.WebURL
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+		return p.PrintMeta(output.Meta{})
+	}
+
+	if strings.TrimSpace(src.Body) == "" {
+		return &output.Error{
+			Err:    "api_error",
+			Detail: "source page returned no atlas_doc_format body to preserve",
+			Hint:   "Retry; if it persists the page body could not be fetched as ADF for preservation.",
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+
 	// No inline-comment guard: a move re-sends the source's exact ADF and changes
 	// only parentId. A live scratch-page test confirmed this preserves inline
 	// comment anchors (marker ref and resolution status), so a move cannot
@@ -1146,18 +1167,10 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 	if err != nil {
 		return cli.ClassifyError(err)
 	}
-
-	row := map[string]any{
-		"id":                 rec.ID,
-		"title":              rec.Title,
-		"space_id":           src.SpaceID,
-		"previous_parent_id": src.ParentID,
-		"parent_id":          dstID,
-		"previous_version":   c.IfVersion,
-		"version":            rec.Version,
-		"moved":              true,
-		"web_url":            rec.WebURL,
-	}
+	row["id"] = rec.ID
+	row["title"] = rec.Title
+	row["version"] = rec.Version
+	row["web_url"] = rec.WebURL
 	if err := p.PrintItem(row); err != nil {
 		return err
 	}

@@ -318,20 +318,23 @@ title-only update (no piped body) re-sends the exact ADF and is not guarded.
 
 ### page move
 
-Reparent a page under a different parent within the same space, preserving the
-page ID, history, comments, and attachments. `--if-version` guards the source
-version. A cross-space destination is refused with `cross_space_move_unsupported`
-(the v2 API cannot move across spaces -- use the Confluence UI); self-parenting
-and cycles are `invalid_move`. Already-a-child returns `moved:false` with no
-write. A move re-sends the exact ADF and touches only the parent, so it does not
-disturb inline-comment anchors.
+Move a page under a different parent, in the same space or another space,
+preserving the page ID, history, comments, and attachments. `--if-version`
+guards the source version. Self-parenting and cycles are `invalid_move`.
+Already-a-child returns `moved:false` with no write.
+
+A same-space move re-sends the exact ADF and touches only the parent, so it does
+not disturb inline-comment anchors; it bumps the version. A cross-space move uses
+the v1 move endpoint (the only public API for it): the body is untouched and the
+version does not change, so `--if-version` is checked before the write but not
+at write time. Restrictions across a cross-space move are unverified.
 
 ```bash
 confluence page move 123456 --parent 200000 --if-version 5
 ```
 
 ```jsonl
-{"id":"123456","title":"API Design","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"id":"123456","title":"API Design","previous_space_id":"98765","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
 {"_meta":{"has_more":false}}
 ```
 

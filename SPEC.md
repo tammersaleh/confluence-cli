@@ -49,7 +49,7 @@ Errors that prevent the command from running (auth failure, network error, bad i
 - `hint` - a concrete recovery command. Every hint names a command the caller can run next.
 - `input` - the specific input that failed.
 - `endpoint` - the Confluence API endpoint, present only on upstream API failures.
-- `data` - an error-specific structured object, present only when an error carries structured context (e.g. the blocking comments for `unresolved_inline_comments`, or the source/destination spaces for `cross_space_move_unsupported`). Always an object; not subject to `--fields`.
+- `data` - an error-specific structured object, present only when an error carries structured context (e.g. the blocking comments for `unresolved_inline_comments`). Always an object; not subject to `--fields`.
 
 ### Timestamp enrichment
 
@@ -251,11 +251,13 @@ Fetch one or more pages by numeric id or page URL. All arguments must resolve to
 
 A `subtype` field appears only when the page is a live doc (value `live`); regular pages omit it. Use this to tell live docs apart and to verify a `page convert-to-live`.
 
+Each row carries `status` (`current`, `draft`, ...). `parent_id` and `parent_type` (`page`, `folder`, `database`) appear when the page has a parent; a space root omits both. Right after a move the parent fields can lag the write by a few minutes server-side; `page children` on the destination reflects the move first.
+
 Per-item errors (bad id, no permission) appear inline on stdout and bump `_meta.error_count`.
 
 ```jsonl
 $ confluence page get 123456
-{"input":"123456","id":"123456","title":"API Design","space_id":"98765","version":5,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","modified_at":"2024-06-20T14:45:00.000Z","modified_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456","body":"<p>See the design.</p>","body_format":"storage"}
+{"input":"123456","id":"123456","title":"API Design","space_id":"98765","status":"current","parent_id":"123400","parent_type":"page","version":5,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","modified_at":"2024-06-20T14:45:00.000Z","modified_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456","body":"<p>See the design.</p>","body_format":"storage"}
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 
@@ -263,7 +265,7 @@ Markdown, with a failed lookup interleaved:
 
 ```jsonl
 $ confluence page get 123456 99999 --body-format markdown
-{"input":"123456","id":"123456","title":"API Design","space_id":"98765","version":5,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","modified_at":"2024-06-20T14:45:00.000Z","modified_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456","body":"# API Design\n\nSee the design.","body_format":"markdown","source_body_format":"storage"}
+{"input":"123456","id":"123456","title":"API Design","space_id":"98765","status":"current","parent_id":"123400","parent_type":"page","version":5,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","modified_at":"2024-06-20T14:45:00.000Z","modified_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456","body":"# API Design\n\nSee the design.","body_format":"markdown","source_body_format":"storage"}
 {"input":"99999","error":"page_not_found","detail":"No page with id '99999'","hint":"confluence page list --space ENG"}
 {"_meta":{"has_more":false,"error_count":1}}
 ```
@@ -385,7 +387,7 @@ A version mismatch is a fatal error on stderr:
 
 #### Inline-comment guard
 
-A `page update` that pipes a NEW body destroys the anchors of open inline comments (they are markers inside the body). Before such a write, `page update` drains the page's inline comments and refuses with `unresolved_inline_comments` if any is not exactly `resolved` (`open`, `reopened`, `dangling`, and any unknown status all block). The refusal writes nothing, does not bump the version, and carries the blocking comments in the error's `data` object. The check fails closed: if the comments cannot be inspected, the write is refused. `--allow-unresolved-inline-comments` skips the inspection entirely and proceeds; it does not bypass `--if-version` or any other check. A title-only `page update` and `page move` re-send the page's exact ADF (verified against a live page to preserve anchors), so they are not guarded.
+A `page update` that pipes a NEW body destroys the anchors of open inline comments (they are markers inside the body). Before such a write, `page update` drains the page's inline comments and refuses with `unresolved_inline_comments` if any is not exactly `resolved` (`open`, `reopened`, `dangling`, and any unknown status all block). The refusal writes nothing, does not bump the version, and carries the blocking comments in the error's `data` object. The check fails closed: if the comments cannot be inspected, the write is refused. `--allow-unresolved-inline-comments` skips the inspection entirely and proceeds; it does not bypass `--if-version` or any other check. A title-only `page update` and a same-space `page move` re-send the page's exact ADF (verified against a live page to preserve anchors), and a cross-space `page move` never touches the body, so they are not guarded.
 
 ```json
 {"error":"unresolved_inline_comments","detail":"refusing to replace the page body: 1 inline comment(s) are not resolved and this write may destroy their anchors","hint":"Resolve or re-anchor the comments in Confluence (see the web URLs), then retry. Pass --allow-unresolved-inline-comments to override.","input":"123456","data":{"page_id":"123456","blocking_comment_count":1,"blocking_comments":[{"id":"c9","resolution_status":"open","original_selection":"the retry budget","inline_marker_ref":"m1","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456?focusedCommentId=c9"}]}}
@@ -397,20 +399,28 @@ A `page update` that pipes a NEW body destroys the anchors of open inline commen
 confluence page move <id|url> --parent <id|url> --if-version <n>
 ```
 
-Reparent a page under a different parent within the SAME space, preserving the page ID, history, comments, and attachments. Both refs must resolve to one site. `--if-version` guards the source page's version as in `page update`.
+Move a page under a different parent, in the same space or in another space, preserving the page ID, history, comments, and attachments. Both refs must resolve to one site. `--if-version` guards the source page's version as in `page update`.
 
-The Confluence v2 API cannot move a page across spaces; a destination parent in a different space is refused with `cross_space_move_unsupported` (do that move in the Confluence UI). Self-parenting and a destination that is a descendant of the source (a cycle) are refused with `invalid_move`. If the page is already under the destination parent, the row carries `moved:false` and no write is issued. A move re-sends the page's exact ADF and changes only the parent, so it does not disturb inline-comment anchors and is not subject to the inline-comment guard.
+Self-parenting and a destination that is a descendant of the source (a cycle) are refused with `invalid_move`. If the page is already under the destination parent, the row carries `moved:false` and no write is issued.
+
+A same-space move is a v2 update that re-sends the page's exact ADF and changes only the parent. It bumps the version, and a concurrent edit fails at write time with `version_conflict`. It does not disturb inline-comment anchors and is not subject to the inline-comment guard.
+
+A cross-space move (destination parent in another space) uses the v1 move endpoint, the only public API that moves a published page between spaces (the v2 update endpoint refuses with "Only DRAFT pages can be moved between spaces"). It does not touch the body and does not bump the version, so `version` equals `previous_version` and `--if-version` is enforced only by the preflight read, not at write time. Attachments and comments move with the page. Whether page restrictions survive a cross-space move has not been verified; check them in Confluence afterwards if they matter. The page's URL changes to the destination space.
+
+The row carries `id`, `title`, `previous_space_id`, `space_id`, `previous_parent_id`, `parent_id`, `previous_version`, `version`, `moved`, and `web_url`. `web_url` is the pre-move URL for a cross-space move (the response does not include the new one); `page get` returns the current URL.
 
 ```jsonl
 $ confluence page move 123456 --parent 200000 --if-version 5
-{"id":"123456","title":"API Design","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"id":"123456","title":"API Design","previous_space_id":"98765","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
 {"_meta":{"has_more":false}}
 ```
 
-A cross-space destination is a fatal error on stderr:
+Cross-space (version unchanged):
 
-```json
-{"error":"cross_space_move_unsupported","detail":"source page is in space 98765 but destination parent is in space 55555; the Confluence v2 API only reparents within one space","hint":"Open the source page in Confluence and use the Move action to move it across spaces.","input":"123456","data":{"source_page_id":"123456","source_space_id":"98765","destination_page_id":"200000","destination_space_id":"55555"}}
+```jsonl
+$ confluence page move 123456 --parent 300000 --if-version 5
+{"id":"123456","title":"API Design","previous_space_id":"98765","space_id":"55555","previous_parent_id":"100000","parent_id":"300000","previous_version":5,"version":5,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/~user/pages/123456"}
+{"_meta":{"has_more":false}}
 ```
 
 ### page delete

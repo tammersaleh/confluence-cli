@@ -2645,6 +2645,81 @@ func TestClient_DeletePage(t *testing.T) {
 	}
 }
 
+func TestClient_MovePage(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.Write([]byte(`{"pageId":"123"}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	if err := c.MovePage(context.Background(), "123", MoveAppend, "456"); err != nil {
+		t.Fatalf("MovePage() error: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("method = %q, want PUT", gotMethod)
+	}
+	if gotPath != "/wiki/rest/api/content/123/move/append/456" {
+		t.Errorf("path = %q, want /wiki/rest/api/content/123/move/append/456", gotPath)
+	}
+}
+
+func TestClient_MovePage_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"statusCode":404,"message":"The target content provided does not exist."}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	err := c.MovePage(context.Background(), "123", MoveAppend, "456")
+	if !errors.Is(err, ErrPageNotFound) {
+		t.Fatalf("expected ErrPageNotFound, got %v", err)
+	}
+}
+
+func TestClient_MovePage_BadRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"statusCode":400,"message":"Invalid to perform any move operation where source is same as target"}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	err := c.MovePage(context.Background(), "123", MoveAppend, "123")
+	if !errors.Is(err, ErrAPIError) {
+		t.Fatalf("expected ErrAPIError, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "source is same as target") {
+		t.Errorf("error should carry the server message, got %v", err)
+	}
+}
+
+func TestClient_MovePage_WrongPageIDInResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"pageId":"999"}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	err := c.MovePage(context.Background(), "123", MoveAppend, "456")
+	if !errors.Is(err, ErrAPIError) {
+		t.Fatalf("expected ErrAPIError for mismatched pageId, got %v", err)
+	}
+}
+
+func TestClient_MovePage_InvalidPosition(t *testing.T) {
+	c := NewClient("http://127.0.0.1:0", "test@example.com", "api-token")
+	if err := c.MovePage(context.Background(), "123", MovePosition("sideways"), "456"); err == nil {
+		t.Fatal("expected error for invalid position")
+	}
+}
+
 func TestClient_DeletePage_NotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

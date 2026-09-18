@@ -1229,15 +1229,16 @@ func (c *client) GetPageContent(ctx context.Context, pageID string) (*PageConten
 }
 
 type pageDetailResponse struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	SpaceID   string `json:"spaceId"`
-	Status    string `json:"status"`
-	ParentID  string `json:"parentId"`
-	AuthorID  string `json:"authorId"`
-	CreatedAt string `json:"createdAt"`
-	Subtype   string `json:"subtype"`
-	Body      struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	SpaceID    string `json:"spaceId"`
+	Status     string `json:"status"`
+	ParentID   string `json:"parentId"`
+	ParentType string `json:"parentType"`
+	AuthorID   string `json:"authorId"`
+	CreatedAt  string `json:"createdAt"`
+	Subtype    string `json:"subtype"`
+	Body       struct {
 		Storage struct {
 			Value string `json:"value"`
 		} `json:"storage"`
@@ -1305,6 +1306,7 @@ func (c *client) GetPage(ctx context.Context, pageID string, format APIBodyForma
 		SpaceID:    result.SpaceID,
 		Status:     result.Status,
 		ParentID:   result.ParentID,
+		ParentType: result.ParentType,
 		Version:    result.Version.Number,
 		AuthorID:   result.AuthorID,
 		CreatedAt:  result.CreatedAt,
@@ -1640,6 +1642,41 @@ func (c *client) UpdatePage(ctx context.Context, p UpdatePageParams) (*PageRecor
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 	return result.toRecord(c), nil
+}
+
+// MovePage calls the v1 move endpoint:
+// PUT /wiki/rest/api/content/{id}/move/{position}/{targetId}. It is the only
+// public API that moves a published page to another space (the v2 update
+// endpoint refuses with "Only DRAFT pages can be moved between spaces"). The
+// server returns {"pageId":"<id>"}; anything else is treated as a failure so a
+// silently ignored move cannot report success.
+func (c *client) MovePage(ctx context.Context, pageID string, position MovePosition, targetID string) error {
+	switch position {
+	case MoveAppend, MoveAbove, MoveBelow:
+	default:
+		return fmt.Errorf("unsupported move position %q", position)
+	}
+
+	path := fmt.Sprintf("/wiki/rest/api/content/%s/move/%s/%s", pageID, position, targetID)
+	resp, err := c.doRequest(ctx, http.MethodPut, path, nil)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrPageNotFound
+		}
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		PageID string `json:"pageId"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decoding response: %w", err)
+	}
+	if result.PageID != pageID {
+		return fmt.Errorf("%w: move of page %s returned pageId %q", ErrAPIError, pageID, result.PageID)
+	}
+	return nil
 }
 
 func (c *client) DeletePage(ctx context.Context, pageID string) error {

@@ -167,6 +167,7 @@ type PageDetail struct {
 	SpaceID    string
 	Status     string // "current", "draft", etc. - preserved verbatim on update
 	ParentID   string // parent page id, "" for a space root
+	ParentType string // "page", "database", "folder", or "" when there is no parent
 	Version    int
 	AuthorID   string
 	CreatedAt  string // ISO 8601
@@ -214,6 +215,16 @@ type CreatePageParams struct {
 // number to send (the caller computes it, typically current+1). Status is
 // preserved verbatim from the current page and must be supplied (UpdatePage no
 // longer defaults it to "current", which would silently change a draft).
+// MovePosition is where the v1 move endpoint places the page relative to the
+// target: under it (append) or as a sibling before/after it (above/below).
+type MovePosition string
+
+const (
+	MoveAppend MovePosition = "append"
+	MoveAbove  MovePosition = "above"
+	MoveBelow  MovePosition = "below"
+)
+
 // ParentID reparents the page when non-nil; nil omits parentId entirely so an
 // ordinary update never moves the page.
 type UpdatePageParams struct {
@@ -252,6 +263,10 @@ type Client interface {
 	GetContentParent(ctx context.Context, id string, contentType string) (*Page, error)
 	CreatePage(ctx context.Context, p CreatePageParams) (*PageRecord, error)
 	UpdatePage(ctx context.Context, p UpdatePageParams) (*PageRecord, error)
+	// MovePage moves pageID relative to targetID via the v1 move endpoint, the
+	// only public API that moves a published page across spaces. It does not
+	// touch the body and does not bump the version.
+	MovePage(ctx context.Context, pageID string, position MovePosition, targetID string) error
 	DeletePage(ctx context.Context, pageID string) error
 	// ConvertPageToLive converts an existing page to a live doc. It uses an
 	// undocumented internal Confluence endpoint (no public API exists); see

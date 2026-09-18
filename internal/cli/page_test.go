@@ -287,14 +287,20 @@ func pageGetServer(t *testing.T, notFound map[string]bool) *httptest.Server {
 		if id == "live1" {
 			subtype = `"subtype": "live",`
 		}
+		parent := ""
+		if id == "child1" {
+			parent = `"parentId": "parent9", "parentType": "page",`
+		}
 
 		_, _ = w.Write([]byte(`{
 			"id": "` + id + `",
 			"title": "Page ` + id + `",
 			"spaceId": "space1",
+			"status": "current",
 			"authorId": "user456",
 			"createdAt": "2024-01-15T10:30:00.000Z",
 			` + subtype + `
+			` + parent + `
 			` + body + `,
 			"version": {"number": 5, "createdAt": "2024-06-20T14:45:00.000Z"},
 			"_links": {"webui": "/spaces/TEST/pages/` + id + `/Page"}
@@ -343,6 +349,42 @@ func TestPageGet_Storage(t *testing.T) {
 	}
 	if row["title"] != "Page 123" || row["version"] != float64(5) || row["web_url"] == "" {
 		t.Errorf("row missing title/version/web_url: %v", row)
+	}
+}
+
+func TestPageGet_ParentAndStatus(t *testing.T) {
+	clearCredEnv(t)
+	server := pageGetServer(t, nil)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"child1", "123"}, BodyFormat: "storage"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	lines := parseLines(t, out.String())
+	if len(lines) != 3 {
+		t.Fatalf("expected 2 rows + meta, got %d: %q", len(lines), out.String())
+	}
+	child := lines[0]
+	if child["parent_id"] != "parent9" || child["parent_type"] != "page" {
+		t.Errorf("child parent_id/parent_type = %v/%v, want parent9/page", child["parent_id"], child["parent_type"])
+	}
+	if child["status"] != "current" {
+		t.Errorf("child status = %v, want current", child["status"])
+	}
+	root := lines[1]
+	if _, ok := root["parent_id"]; ok {
+		t.Errorf("root page must omit parent_id: %v", root)
+	}
+	if _, ok := root["parent_type"]; ok {
+		t.Errorf("root page must omit parent_type: %v", root)
+	}
+	if root["status"] != "current" {
+		t.Errorf("root status = %v, want current", root["status"])
 	}
 }
 
@@ -1622,6 +1664,7 @@ func TestPageCreate_ParentResolves(t *testing.T) {
 
 // capturedUpdate records whether a PUT happened and its decoded body.
 type capturedUpdate struct {
+	v1Move       bool // the v1 move endpoint was hit
 	called       bool
 	title        string
 	status       string
@@ -1958,6 +2001,7 @@ type moveServerConfig struct {
 	dstSpaceID     string
 	ancestorsOfDst []string
 	putStatus      int // 0 => 200 OK; otherwise the PUT returns this status
+	v1MoveStatus   int // 0 => 200 OK; otherwise the v1 move returns this status
 }
 
 // pageMoveServer serves the source GET (ADF), destination GET (storage), source
@@ -1969,6 +2013,14 @@ func pageMoveServer(t *testing.T, cfg moveServerConfig, cap *capturedUpdate) *ht
 		const prefix = "/wiki/api/v2/pages/"
 		rest := strings.TrimPrefix(r.URL.Path, prefix)
 		switch {
+		case r.URL.Path == "/wiki/rest/api/content/"+cfg.srcID+"/move/append/"+cfg.dstID && r.Method == http.MethodPut:
+			if cfg.v1MoveStatus != 0 {
+				w.WriteHeader(cfg.v1MoveStatus)
+				_, _ = w.Write([]byte(`{"statusCode":` + fmt.Sprint(cfg.v1MoveStatus) + `,"message":"The target content provided does not exist."}`))
+				return
+			}
+			cap.v1Move = true
+			_, _ = w.Write([]byte(`{"pageId":` + jsonQuote(cfg.srcID) + `}`))
 		case rest == cfg.srcID+"/inline-comments":
 			t.Errorf("page move must not drain inline comments")
 			w.WriteHeader(http.StatusNotFound)
@@ -2071,7 +2123,7 @@ func TestPageMove_SameSpace(t *testing.T) {
 	}
 }
 
-func TestPageMove_CrossSpaceRefused(t *testing.T) {
+func TestPageMove_CrossSpace(t *testing.T) {
 	clearCredEnv(t)
 	var cap capturedUpdate
 	server := pageMoveServer(t, moveServerConfig{
@@ -2085,16 +2137,69 @@ func TestPageMove_CrossSpaceRefused(t *testing.T) {
 	c := newWriteCLI(t, &out, &errBuf, "")
 
 	cmd := &PageMoveCmd{Ref: "100", Parent: "200", IfVersion: 5}
-	err := cmd.Run(c)
-	var oErr *output.Error
-	if !errors.As(err, &oErr) || oErr.Err != "cross_space_move_unsupported" {
-		t.Fatalf("expected cross_space_move_unsupported, got %v", err)
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if !cap.v1Move {
+		t.Fatalf("v1 move endpoint not called")
 	}
 	if cap.called {
-		t.Errorf("cross-space move must not PUT")
+		t.Errorf("cross-space move must not PUT the v2 page")
 	}
-	if oErr.Data["source_space_id"] != "s1" || oErr.Data["destination_space_id"] != "s2" {
-		t.Errorf("error data unexpected: %v", oErr.Data)
+	lines := parseLines(t, out.String())
+	r := lines[0]
+	if r["moved"] != true || r["previous_parent_id"] != "50" || r["parent_id"] != "200" {
+		t.Errorf("row unexpected: %v", r)
+	}
+	if r["previous_space_id"] != "s1" || r["space_id"] != "s2" {
+		t.Errorf("space ids unexpected: %v", r)
+	}
+	// The v1 move does not bump the version.
+	if r["previous_version"] != float64(5) || r["version"] != float64(5) {
+		t.Errorf("version must be unchanged: %v", r)
+	}
+}
+
+func TestPageMove_CrossSpace_EmptyBodyAllowed(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	server := pageMoveServer(t, moveServerConfig{
+		srcID: "100", dstID: "200", srcVersion: 5, srcParentID: "50",
+		srcSpaceID: "s1", srcBody: "", dstSpaceID: "s2",
+	}, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageMoveCmd{Ref: "100", Parent: "200", IfVersion: 5}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v (cross-space needs no ADF body)", err)
+	}
+	if !cap.v1Move {
+		t.Fatalf("v1 move endpoint not called")
+	}
+}
+
+func TestPageMove_CrossSpace_TargetVanished(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	server := pageMoveServer(t, moveServerConfig{
+		srcID: "100", dstID: "200", srcVersion: 5, srcParentID: "50",
+		srcSpaceID: "s1", srcBody: `{"x":1}`, dstSpaceID: "s2", v1MoveStatus: 404,
+	}, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageMoveCmd{Ref: "100", Parent: "200", IfVersion: 5}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "page_not_found" {
+		t.Fatalf("expected page_not_found, got %v", err)
 	}
 }
 
