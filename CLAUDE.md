@@ -218,6 +218,19 @@ follows it:
 - A push is not the finish line. After a release-cutting push, wait for the tag, upgrade the installed cask, and verify `confluence version` against the real artifact before calling a change done.
 - The pre-push hook runs `mise run check`; never bypass with `--no-verify`.
 
+### One sub-agent per feature
+
+Run each feature in its own sub-agent (`fork` when it needs the current
+conversation, otherwise `general-purpose`) to keep test output, diffs, and
+review transcripts out of the main thread's context. The sub-agent does the
+work end to end: SPEC read, branch, red-green-refactor, `mise run check`,
+commits, code review, merge, push. The main thread keeps the plan file
+current, reads the agent's report, waits for the release, installs and
+verifies the cask, updates this file with anything learned, then starts the
+next feature's agent. Give the agent the SPEC.md section, the plan file path,
+and the sibling-repo pointers up front so it starts cold without
+re-discovery.
+
 ## Notes for future sessions
 
 Learnings from the build worth keeping.
