@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.1](https://github.com/tammersaleh/confluence-cli/compare/v2.3.0...v2.3.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **release:** migrate cask post-install hook to install_steps ([9fadc0d](https://github.com/tammersaleh/confluence-cli/commit/9fadc0d1c077b66f31e18df2208126038e52fd7e))
+
 ## [2.3.0](https://github.com/tammersaleh/confluence-cli/compare/v2.2.0...v2.3.0) (2026-09-18)
 
 
