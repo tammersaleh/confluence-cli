@@ -366,14 +366,23 @@ func (c *converter) handleACLink(decoder *xml.Decoder) error {
 					return err
 				}
 				continue
-			case "ri:page":
-				kind, target = name, getAttr(t.Attr, "ri:content-title")
-			case "ri:user":
-				kind, target = name, getAttr(t.Attr, "ri:account-id")
-			case "ri:attachment":
-				kind, target = name, getAttr(t.Attr, "ri:filename")
-			case "ri:url":
-				kind, target = name, getAttr(t.Attr, "ri:value")
+			case "ri:page", "ri:user", "ri:attachment", "ri:url":
+				// First resource wins: an attachment on another page nests the
+				// owning <ri:page> inside <ri:attachment>, and that page must
+				// not replace the attachment as the link target.
+				if kind == "" {
+					kind = name
+					switch name {
+					case "ri:page":
+						target = getAttr(t.Attr, "ri:content-title")
+					case "ri:user":
+						target = getAttr(t.Attr, "ri:account-id")
+					case "ri:attachment":
+						target = getAttr(t.Attr, "ri:filename")
+					case "ri:url":
+						target = getAttr(t.Attr, "ri:value")
+					}
+				}
 			}
 			depth++
 		case xml.EndElement:

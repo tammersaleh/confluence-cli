@@ -59,6 +59,11 @@ func TestConvert_ACLink(t *testing.T) {
 			want:  "[the spec](spec.pdf)\n",
 		},
 		{
+			name:  "attachment on another page keeps the attachment as target",
+			input: `<p><ac:link><ri:attachment ri:filename="spec.pdf"><ri:page ri:content-title="Other Page" /></ri:attachment><ac:link-body>spec</ac:link-body></ac:link></p>`,
+			want:  "[spec](spec.pdf)\n",
+		},
+		{
 			name:  "url link",
 			input: `<p><ac:link><ri:url ri:value="https://example.com" /><ac:link-body>Example</ac:link-body></ac:link></p>`,
 			want:  "[Example](https://example.com)\n",

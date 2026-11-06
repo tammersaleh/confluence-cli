@@ -106,8 +106,9 @@ func TestPrepareStorageSelfClosing(t *testing.T) {
 	}
 }
 
-// Regression: HTMLAutoClose matched <ac:link> by its local name "link", which
-// would make the real </ac:link> a well-formedness error.
+// Guard: a storage body with <ac:link>...</ac:link> must validate. The strict
+// decoder ignores AutoClose, so this passed before the converter fix too; it
+// pins the behavior in case the decoder setup ever changes.
 func TestPrepareStorageACLink(t *testing.T) {
 	in := `<p>See <ac:link><ri:page ri:content-title="X" /><ac:link-body>X</ac:link-body></ac:link> and <ac:link><ri:user ri:account-id="1" /></ac:link></p>`
 	rep, val, err := Prepare("storage", in)
