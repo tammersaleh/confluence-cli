@@ -1,6 +1,6 @@
 ---
 name: confluence-cli
-description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), inspect spaces (space info/list), attachments, CQL search, comments, labels, users, and write content (page create/update/move/delete, attachment upload, comment add including inline, label add/remove) with storage, ADF, or Markdown bodies on stdin"
+description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), inspect spaces (space info/list), attachments, CQL search, comments, labels, users, and write content (page create/update/move/delete, page restrictions get/set/clear incl. --only-me and create --restrict-to-me, attachment upload, comment add including inline, label add/remove) with storage, ADF, or Markdown bodies on stdin"
 argument-hint: ""
 allowed-tools:
   - Bash(confluence *)
@@ -14,7 +14,7 @@ command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 Both reads and writes ship today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
 `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`,
-`attachment list`,
+`page restrictions get|set|clear`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
 `user info`. Read commands are below; writes are under "Writing content". The
@@ -461,6 +461,14 @@ Create a live doc by adding `--live`:
 printf '<p>Hello</p>' | confluence page create --space ENG --title "Team Notes" --body-format storage --live
 ```
 
+Create a page only you can view and edit by adding `--restrict-to-me` (the row
+gains `restricted:true`). Use this for drafts; there is no window where the
+page is open to the space.
+
+```bash
+printf '<p>Draft</p>' | confluence page create --space ENG --title "Private Draft" --body-format storage --restrict-to-me
+```
+
 ### Bodies that look right but fail
 
 These pass a casual eye but are rejected locally as `invalid_body`:
@@ -621,6 +629,47 @@ confluence page get 123456 --fields subtype   # verify: {"subtype":"live"}
 
 To create a live doc from scratch, prefer `page create --live` (a supported REST
 call) over creating a page and converting it.
+
+### Restricting a page (view/edit)
+
+`page restrictions get` shows who may view (`read`) and who may edit
+(`update`), two rows, with `users` (`account_id`, `display_name`) and `groups`
+(`id`, `name`). Empty lists mean unrestricted. Inherited restrictions from
+parent pages are not shown.
+
+```bash
+confluence page restrictions get 123456
+```
+
+```jsonl
+{"page_id":"123456","operation":"read","users":[{"account_id":"a1","display_name":"Ada Lovelace"}],"groups":[]}
+{"page_id":"123456","operation":"update","users":[{"account_id":"a1","display_name":"Ada Lovelace"}],"groups":[]}
+{"_meta":{"has_more":false}}
+```
+
+`page restrictions set` replaces the restrictions with exactly what you pass.
+It always rewrites BOTH operations: an operation you give no flags for is
+cleared. Users are account ids (`confluence user current`, `user info`, or a
+page's `author_id`), groups are group names. The output is the final state.
+
+```bash
+confluence page restrictions set 123456 --only-me
+confluence page restrictions set 123456 --read-user a1 --read-user b2 --update-user a1
+confluence page restrictions set 123456 --read-group eng-leads --read-user a1 --update-user a1
+```
+
+Rules:
+
+- Confluence refuses a write that would remove your own view or edit access
+  and the CLI reports `self_lockout`. Include your own account id in the user
+  lists for every operation you restrict; being a member of a listed group is
+  not enough for the server's check.
+- An editor must also be a viewer while `read` is restricted.
+- No flags is `invalid_input`. To drop all restrictions use `clear`.
+
+```bash
+confluence page restrictions clear 123456
+```
 
 ### Uploading attachments
 
