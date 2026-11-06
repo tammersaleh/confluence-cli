@@ -191,7 +191,7 @@ no `.body`), and piping that into `page update` is refused (see "Bodies that
 look right but fail").
 
 ```bash
-confluence page get 123456 | jq -s '.[0].body'
+confluence page get 123456 | jq -rs '.[0].body'
 confluence page get 123456 | head -1 | jq -r .body
 ```
 
@@ -489,12 +489,14 @@ These pass a casual eye but are rejected locally as `invalid_body`:
   `{"type":"text","text":"..."}`.
 
 One more is rejected as `invalid_input`, because it is a piping mistake rather
-than a malformed body: a `storage` or `markdown` body whose last line is a bare
-`null` (or `true`/`false`) right after a `>`. That is the `_meta` trailer
-leaking through `page get | jq -r .body`. The hint names the fix:
-`jq -s '.[0].body'` or `head -1 | jq -r .body`. A literal `<p>null</p>` is
-content and passes. The same mistake on an `adf` body fails JSON parsing as
-`invalid_body`.
+than a malformed body: a body whose last line is a bare `null` (or
+`true`/`false`). That is the `_meta` trailer leaking through
+`page get | jq -r .body`. The hint names the fix: `jq -rs '.[0].body'` or
+`head -1 | jq -r .body`. For `storage` the line must follow a `>`, so a
+literal `<p>null</p>` is content and passes. For `markdown` any final line
+that is exactly one of those words is refused (end a document on `` `null` ``
+or punctuation instead). The same mistake on an `adf` body fails JSON parsing
+as `invalid_body`.
 
 A correct minimal ADF doc:
 

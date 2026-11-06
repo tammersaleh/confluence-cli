@@ -49,7 +49,7 @@ internal/
   confluenceurl/
     confluenceurl.go           Parses page/space URLs into a Ref (Kind, BaseURL, SpaceKey, PageID). CommonSite enforces one-site-per-invocation for page get.
   bodywrite/
-    bodywrite.go               Write-command body input: Read (stdin, TTY vs pipe) + Prepare (validate storage XHTML or ADF locally, or convert markdown to storage via goldmark, return representation+value). invalid bodies fail before the API sees them. Markdown fenced code becomes a plain preformatted block, not a code macro; raw HTML is escaped. checkTrailingJSONScalar (storage + markdown) returns ErrTrailingJSONScalar when the last line is a bare `null`/`true`/`false` after a `>` - the `_meta` trailer leaking through `jq -r .body`; internal/cli maps it to `invalid_input` with a `jq -s '.[0].body'` hint via pipingError.
+    bodywrite.go               Write-command body input: Read (stdin, TTY vs pipe) + Prepare (validate storage XHTML or ADF locally, or convert markdown to storage via goldmark, return representation+value). invalid bodies fail before the API sees them. Markdown fenced code becomes a plain preformatted block, not a code macro; raw HTML is escaped. checkTrailingJSONScalar returns ErrTrailingJSONScalar when the last line is a bare `null`/`true`/`false` (storage additionally requires a preceding `>`; markdown does not) - the `_meta` trailer leaking through `jq -r .body`; internal/cli maps it to `invalid_input` with a `jq -rs '.[0].body'` hint via pipingError.
   converter/
     converter.go               Converts Confluence storage format (XHTML) to GFM Markdown.
   sync/

@@ -66,9 +66,10 @@ not a Confluence code macro, and raw HTML embedded in the Markdown is escaped.
 
 Because every command's output is JSONL with a `_meta` trailer line, bare
 `jq -r .body` on `page get` output appends a `null` line. Extract one field
-with `jq -s '.[0].body'` or `head -1 | jq -r .body`. A `storage` or `markdown`
-body ending in a bare `null`/`true`/`false` line right after a `>` is refused
-as `invalid_input` with a hint naming the fix; `<p>null</p>` passes.
+with `jq -rs '.[0].body'` or `head -1 | jq -r .body`. A body whose last line
+is a bare `null`/`true`/`false` is refused as `invalid_input` with a hint
+naming the fix. For `storage` the line must follow a `>` (so `<p>null</p>`
+passes); for `markdown` any such final line is refused.
 
 ### version
 
@@ -196,7 +197,7 @@ confluence page get 123456 --resolve-authors
 ```
 
 Output is JSONL: even one id emits the row plus the `_meta` trailer. To
-extract a single field, use `jq -s '.[0].body'` or `head -1 | jq -r .body`,
+extract a single field, use `jq -rs '.[0].body'` or `head -1 | jq -r .body`,
 not bare `jq -r .body` (which appends a `null` line from the trailer).
 
 ```jsonl
