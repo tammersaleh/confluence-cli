@@ -175,7 +175,7 @@ func TestSync_SingleLeafPage(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestSync_PageWithChildren(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestSync_NestedHierarchy(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestSync_PageWithAttachments(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestSync_PruneRemovesStaleFiles(t *testing.T) {
 
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -373,7 +373,7 @@ func TestSync_PrunePreservesCurrentFiles(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestSync_PruneWithVersionSkip(t *testing.T) {
 
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestSync_PruneProtectsAttachmentsOfSkippedPages(t *testing.T) {
 
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestSync_PruneRemovesEmptyDirectories(t *testing.T) {
 
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -526,7 +526,7 @@ func TestSync_PruneDisabledByDefault(t *testing.T) {
 
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestSync_PruneDryRun(t *testing.T) {
 	var logged []string
 	logger := &testLogger{log: func(s string) { logged = append(logged, s) }}
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true, DryRun: true, Logger: logger})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true, DryRun: true, Logger: logger})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -593,7 +593,7 @@ func TestSync_DryRunOption(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{DryRun: true})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{DryRun: true})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -620,7 +620,7 @@ func TestSync_FilenameCollisions(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -664,7 +664,7 @@ func TestSync_Frontmatter(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -721,7 +721,7 @@ func TestSync_MultipleRoots(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestSync_MultipleRoots_NoCollisionWithFirstRootChildren(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -817,7 +817,7 @@ func TestSync_VersionSkip(t *testing.T) {
 	var logged []string
 	logger := &testLogger{log: func(s string) { logged = append(logged, s) }}
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{Logger: logger})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{Logger: logger})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -854,7 +854,7 @@ func TestSync_VersionSkip_ChildrenStillProcessed(t *testing.T) {
 
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -888,7 +888,7 @@ func TestSync_MultipleRoots_DeterministicPaths(t *testing.T) {
 		fs := filesystem.NewMemory()
 		syncer := New(client, fs)
 
-		err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+		_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 		if err != nil {
 			t.Fatalf("iteration %d: Sync error: %v", i, err)
 		}
@@ -933,7 +933,7 @@ func TestSync_DatabaseParentCreatesDirectory(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -978,7 +978,7 @@ func TestSync_FolderParentCreatesDirectory(t *testing.T) {
 	fs := filesystem.NewMemory()
 	syncer := New(client, fs)
 
-	err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
+	_, err := syncer.Sync(context.Background(), "TEST", "/output", Options{})
 	if err != nil {
 		t.Fatalf("Sync error: %v", err)
 	}
@@ -998,6 +998,65 @@ func TestSync_FolderParentCreatesDirectory(t *testing.T) {
 			path == "/output/customers.md" {
 			t.Errorf("container node should not produce markdown, but found: %s", path)
 		}
+	}
+}
+
+// A page whose body cannot be converted is logged and skipped: its stale file
+// stays, its children still sync, and the count comes back in Result.
+func TestSync_ConversionErrorSkipsPage(t *testing.T) {
+	client := &mockClient{
+		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},
+		pages: []confluence.Page{
+			{ID: "1", Title: "Root", ParentID: ""},
+			{ID: "2", Title: "Broken", ParentID: "1"},
+			{ID: "3", Title: "Child of Broken", ParentID: "2"},
+		},
+		contents: map[string]*confluence.PageContent{
+			"1": {ID: "1", Title: "Root", Body: "<p>Root</p>", Version: 1},
+			"2": {ID: "2", Title: "Broken", Body: "<p>a</span><h2>after</h2>", Version: 2},
+			"3": {ID: "3", Title: "Child of Broken", Body: "<p>Child</p>", Version: 1},
+		},
+	}
+
+	fs := filesystem.NewMemory()
+	brokenPath := filepath.Join("/output", "broken", "index.md")
+	stale := []byte("---\nversion: 1\n---\nold content\n")
+	if err := fs.MkdirAll(filepath.Dir(brokenPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.WriteFile(brokenPath, stale, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var logged []string
+	logger := &testLogger{log: func(s string) { logged = append(logged, s) }}
+	syncer := New(client, fs)
+
+	res, err := syncer.Sync(context.Background(), "TEST", "/output", Options{Prune: true, Logger: logger})
+	if err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+	if res.ConversionErrors != 1 {
+		t.Errorf("ConversionErrors = %d, want 1", res.ConversionErrors)
+	}
+
+	files := fs.Files()
+	if got := files[brokenPath]; !bytes.Equal(got, stale) {
+		t.Errorf("broken page file = %q, want the stale file left untouched", got)
+	}
+	childPath := filepath.Join("/output", "broken", "child-of-broken.md")
+	if _, ok := files[childPath]; !ok {
+		t.Errorf("child of broken page not synced; files: %v", keysOf(files))
+	}
+
+	var warned bool
+	for _, l := range logged {
+		if strings.Contains(l, "warning") && strings.Contains(l, "Broken") && strings.Contains(l, "(2)") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("expected a warning naming the skipped page, got: %v", logged)
 	}
 }
 

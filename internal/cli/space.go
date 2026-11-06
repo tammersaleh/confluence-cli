@@ -157,24 +157,35 @@ func (c *SpaceSyncCmd) Run(cli *CLI) error {
 	logger := writerLogger{w: cli.stderr()}
 
 	syncer := sync.New(client, filesystem.OS{})
-	if err := syncer.Sync(ctx, spaceKey, c.Dir, sync.Options{
+	res, err := syncer.Sync(ctx, spaceKey, c.Dir, sync.Options{
 		Prune:  c.Prune,
 		DryRun: c.DryRun,
 		Logger: logger,
-	}); err != nil {
+	})
+	if err != nil {
 		return cli.ClassifyError(err)
 	}
 
+	// A page whose body failed to convert was logged to stderr and skipped. The
+	// summary carries the count and the trailer's error_count mirrors it, so a
+	// partial sync exits 1 like any other bulk command with per-item failures.
 	p := cli.NewPrinter()
 	if err := p.PrintItem(map[string]any{
-		"synced":     true,
-		"space":      spaceKey,
-		"output_dir": c.Dir,
-		"dry_run":    c.DryRun,
+		"synced":            true,
+		"space":             spaceKey,
+		"output_dir":        c.Dir,
+		"dry_run":           c.DryRun,
+		"conversion_errors": res.ConversionErrors,
 	}); err != nil {
 		return err
 	}
-	return p.PrintMeta(output.Meta{})
+	if err := p.PrintMeta(output.Meta{ErrorCount: res.ConversionErrors}); err != nil {
+		return err
+	}
+	if res.ConversionErrors > 0 {
+		return &output.ExitError{Code: output.ExitGeneral}
+	}
+	return nil
 }
 
 type SpaceInfoCmd struct {

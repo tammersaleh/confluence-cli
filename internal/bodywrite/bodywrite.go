@@ -115,12 +115,13 @@ func validateStorageFragment(s string) error {
 		return fmt.Errorf("storage body must be an XHTML fragment, not a full HTML document (omit the <html>/<body> wrapper)")
 	}
 
-	// Strict parsing catches mismatched/unclosed tags. AutoClose (mirroring the
-	// converter) lets HTML void elements like <br> close themselves, and
-	// HTMLEntity tolerates named entities such as &nbsp;.
+	// Strict parsing catches mismatched/unclosed tags, so void elements must be
+	// self-closed (<br/>, not <br>). AutoClose is deliberately NOT set: the
+	// decoder ignores it in strict mode anyway, and xml.HTMLAutoClose matches on
+	// local name, so its "link" entry would clash with <ac:link>. HTMLEntity
+	// tolerates named entities such as &nbsp;.
 	decoder := xml.NewDecoder(strings.NewReader("<root>" + s + "</root>"))
 	decoder.Strict = true
-	decoder.AutoClose = xml.HTMLAutoClose
 	decoder.Entity = xml.HTMLEntity
 
 	for {

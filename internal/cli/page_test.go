@@ -824,6 +824,86 @@ func TestPageGet_SiteFlagMismatch(t *testing.T) {
 	}
 }
 
+// Regression: the body was silently truncated after the first <ac:link>.
+func TestPageGet_MarkdownSurvivesACLink(t *testing.T) {
+	clearCredEnv(t)
+	storage := `<h2><ac:link><ri:page ri:content-title="One" /><ac:link-body>One</ac:link-body></ac:link></h2>` +
+		`<p><ac:structured-macro ac:name="excerpt-include"><ac:parameter ac:name="nopanel">true</ac:parameter></ac:structured-macro></p>` +
+		`<h2>Two</h2><p><ac:link><ri:user ri:account-id="712020:abc" /></ac:link></p><h2>Three</h2>`
+	atts := `{"results":[],"_links":{"next":""}}`
+	server := pageGetMarkdownServer(t, storage, atts)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123"}, BodyFormat: "markdown"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 row + 1 meta, got %d: %q", len(lines), out.String())
+	}
+	body, _ := lines[0]["body"].(string)
+	for _, want := range []string{"## [One](One)", "[macro: excerpt-include]", "## Two", "@712020:abc", "## Three"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "true") {
+		t.Errorf("macro parameter text leaked:\n%s", body)
+	}
+}
+
+// A storage body the converter cannot parse is a per-item error, not a
+// truncated body with exit 0.
+func TestPageGet_MarkdownConversionError(t *testing.T) {
+	clearCredEnv(t)
+	storage := `<p>a</span><h2>after</h2>`
+	atts := `{"results":[],"_links":{"next":""}}`
+	server := pageGetMarkdownServer(t, storage, atts)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := newPageGetCLI(t, &out, &errBuf)
+
+	cmd := &PageGetCmd{Refs: []string{"123"}, BodyFormat: "markdown"}
+	err := cmd.Run(c)
+
+	var exitErr *output.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	if exitErr.Code != output.ExitGeneral {
+		t.Errorf("exit code = %d, want %d", exitErr.Code, output.ExitGeneral)
+	}
+
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected error row + meta, got %d: %q", len(lines), out.String())
+	}
+	if lines[0]["error"] != "markdown_conversion_failed" || lines[0]["input"] != "123" {
+		t.Errorf("first row should be markdown_conversion_failed for 123: %v", lines[0])
+	}
+	if hint, _ := lines[0]["hint"].(string); !strings.Contains(hint, "--body-format storage") {
+		t.Errorf("hint should point at the storage body: %v", lines[0])
+	}
+	meta := lines[1]["_meta"].(map[string]any)
+	if meta["error_count"] != float64(1) {
+		t.Errorf("error_count = %v, want 1", meta["error_count"])
+	}
+}
+
 func TestPageGet_MarkdownAttachmentsError(t *testing.T) {
 	clearCredEnv(t)
 	// The page (storage) fetch succeeds, but listing attachments fails. markdown

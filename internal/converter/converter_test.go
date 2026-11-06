@@ -164,7 +164,7 @@ func TestConvert(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Convert(tt.input)
+			got := mustConvert(t, tt.input, Options{})
 			if got != tt.want {
 				t.Errorf("Convert() =\n%q\nwant:\n%q", got, tt.want)
 			}
@@ -201,7 +201,7 @@ func TestConvertWithAttachmentRewrite(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ConvertWithOptions(tt.input, Options{AttachmentPath: tt.attachmentPath})
+			got := mustConvert(t, tt.input, Options{AttachmentPath: tt.attachmentPath})
 			if got != tt.want {
 				t.Errorf("ConvertWithOptions() =\n%q\nwant:\n%q", got, tt.want)
 			}
@@ -218,7 +218,7 @@ func TestConvertWithAttachmentURLResolver(t *testing.T) {
 	}
 
 	// Image via the resolver renders an absolute remote URL.
-	img := ConvertWithOptions(
+	img := mustConvert(t,
 		`<ac:image><ri:attachment ri:filename="diagram.png"/></ac:image>`,
 		Options{AttachmentURL: resolver},
 	)
@@ -228,7 +228,7 @@ func TestConvertWithAttachmentURLResolver(t *testing.T) {
 	}
 
 	// Attachment download link via the resolver also renders the absolute URL.
-	link := ConvertWithOptions(
+	link := mustConvert(t,
 		`<p><a href="/wiki/download/attachments/123/diagram.png">See</a></p>`,
 		Options{AttachmentURL: resolver},
 	)
@@ -238,7 +238,7 @@ func TestConvertWithAttachmentURLResolver(t *testing.T) {
 	}
 
 	// Unknown attachment (!ok) falls back to the bare filename.
-	unknown := ConvertWithOptions(
+	unknown := mustConvert(t,
 		`<ac:image><ri:attachment ri:filename="other.png"/></ac:image>`,
 		Options{AttachmentURL: resolver},
 	)
@@ -247,7 +247,7 @@ func TestConvertWithAttachmentURLResolver(t *testing.T) {
 	}
 
 	// With no resolver, the old local _attachments rewriting is unchanged.
-	old := ConvertWithOptions(
+	old := mustConvert(t,
 		`<ac:image><ri:attachment ri:filename="diagram.png"/></ac:image>`,
 		Options{AttachmentPath: "_attachments"},
 	)
@@ -277,7 +277,7 @@ func main() {
 	<p>See <a href="https://golang.org">Go website</a> for more.</p>
 	`
 
-	got := Convert(input)
+	got := mustConvert(t, input, Options{})
 
 	// Check key elements are present
 	checks := []string{

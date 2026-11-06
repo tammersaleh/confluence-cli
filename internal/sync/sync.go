@@ -30,9 +30,17 @@ type noopLogger struct{}
 
 func (noopLogger) Printf(string, ...interface{}) {}
 
+// Result summarizes a sync. A page whose storage body fails to convert is
+// logged and skipped (its existing Markdown file, if any, is left untouched and
+// its children are still synced); ConversionErrors counts those pages.
+type Result struct {
+	ConversionErrors int
+}
+
 type syncManifest struct {
-	expectedPaths map[string]bool
-	protectedDirs map[string]bool
+	expectedPaths    map[string]bool
+	protectedDirs    map[string]bool
+	conversionErrors int
 }
 
 type Syncer struct {
@@ -44,7 +52,7 @@ func New(client confluence.Client, fs filesystem.FileSystem) *Syncer {
 	return &Syncer{client: client, fs: fs}
 }
 
-func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Options) error {
+func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Options) (Result, error) {
 	log := opts.Logger
 	if log == nil {
 		log = noopLogger{}
@@ -52,12 +60,12 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 
 	space, err := s.client.GetSpace(ctx, spaceKey)
 	if err != nil {
-		return fmt.Errorf("getting space: %w", err)
+		return Result{}, fmt.Errorf("getting space: %w", err)
 	}
 
 	pages, err := s.client.GetPages(ctx, space.ID)
 	if err != nil {
-		return fmt.Errorf("getting pages: %w", err)
+		return Result{}, fmt.Errorf("getting pages: %w", err)
 	}
 
 	tree := BuildTree(pages)
@@ -72,17 +80,17 @@ func (s *Syncer) Sync(ctx context.Context, spaceKey, outputDir string, opts Opti
 	topLevelUsedNames := make(map[string]bool)
 	for i, root := range tree {
 		if err := s.syncNode(ctx, root, outputDir, opts, log, topLevelUsedNames, i == 0, manifest); err != nil {
-			return err
+			return Result{}, err
 		}
 	}
 
 	if opts.Prune {
 		if err := s.pruneStaleFiles(outputDir, manifest, log, opts.DryRun); err != nil {
-			return fmt.Errorf("pruning stale files: %w", err)
+			return Result{}, fmt.Errorf("pruning stale files: %w", err)
 		}
 	}
 
-	return nil
+	return Result{ConversionErrors: manifest.conversionErrors}, nil
 }
 
 func isContainer(page confluence.Page) bool {
@@ -160,15 +168,16 @@ func (s *Syncer) syncNode(ctx context.Context, node *PageNode, parentDir string,
 	if hasAttachments {
 		attachmentPath = "_attachments"
 	}
-	markdown := converter.ConvertWithOptions(content.Body, converter.Options{
+	markdown, convErr := converter.ConvertWithOptions(content.Body, converter.Options{
 		AttachmentPath: attachmentPath,
 	})
-
-	// Prepend frontmatter
-	frontmatter := buildFrontmatter(content)
-	markdown = frontmatter + markdown
-
-	if !opts.DryRun {
+	if convErr != nil {
+		// Leave any existing file in place rather than write a truncated one;
+		// mdPath is already in the manifest so --prune keeps it too.
+		log.Printf("warning: skipping %s (%s): %v", content.Title, content.ID, convErr)
+		manifest.conversionErrors++
+	} else if !opts.DryRun {
+		markdown = buildFrontmatter(content) + markdown
 		if err := s.fs.MkdirAll(filepath.Dir(mdPath), 0755); err != nil {
 			return fmt.Errorf("creating directory: %w", err)
 		}

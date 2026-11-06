@@ -548,9 +548,25 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 				errCount++
 				continue
 			}
-			md := converter.ConvertWithOptions(pd.Body, converter.Options{
+			md, cerr := converter.ConvertWithOptions(pd.Body, converter.Options{
 				AttachmentURL: attachmentResolver(rc.Site, atts),
 			})
+			if cerr != nil {
+				// The storage body is not well-formed XML. Emit a per-item error
+				// instead of a silently truncated body.
+				oErr := &output.Error{
+					Err:    "markdown_conversion_failed",
+					Detail: cerr.Error(),
+					Hint:   "Fetch the raw body with: confluence page get " + pr.input + " --body-format storage",
+					Input:  pr.input,
+					Code:   output.ExitGeneral,
+				}
+				if err := p.PrintItem(oErr.AsItem()); err != nil {
+					return err
+				}
+				errCount++
+				continue
+			}
 			row["body"] = md
 			row["body_format"] = "markdown"
 			row["source_body_format"] = string(confluence.BodyFormatStorage)
