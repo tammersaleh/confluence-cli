@@ -98,6 +98,8 @@ The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `p
 
 Write commands that carry page or comment content (`page create`, `page update`, `comment add`) take the body on stdin, never as a flag. `--body-format` names the representation of what you pipe:
 
+`--format` is accepted as an undocumented alias of `--body-format` on every command that takes it (`page get`, `page create`, `page update`, `comment add`). `--body-format` is the canonical name; use it in scripts and docs.
+
 - `storage` - Confluence storage format, a well-formed XHTML fragment (e.g. `<p>Hello</p>`).
 - `adf` (alias `atlas_doc_format`) - Atlassian Document Format, a JSON document whose root is `{"type":"doc","version":1,"content":[...]}`.
 - `markdown` (alias `md`) - GFM Markdown, converted locally to storage XHTML via goldmark before the API sees it. Fenced code blocks become a plain preformatted block, not a Confluence code macro. Raw HTML embedded in the Markdown is escaped, not passed through.

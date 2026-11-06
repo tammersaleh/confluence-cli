@@ -167,6 +167,9 @@ site per invocation). Each row echoes its `input`.
 URLs and adds `source_body_format`. Bad ids or unreadable pages appear inline on
 stdout and bump `_meta.error_count`.
 
+`--format` is accepted as an alias of `--body-format` here and on `page create`,
+`page update`, and `comment add`. Prefer `--body-format`.
+
 `--resolve-authors` adds an `author_name` sibling next to `author_id`
 (best-effort; one cached user lookup per unique author). A `subtype` field
 appears only for live docs (value `live`); use it to confirm a
