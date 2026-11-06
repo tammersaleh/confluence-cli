@@ -414,7 +414,7 @@ func (c *PageTreeCmd) Run(cli *CLI) error {
 
 type PageGetCmd struct {
 	Refs           []string `arg:"" name:"id-or-url" help:"Page IDs or URLs (all on one site)."`
-	BodyFormat     string   `default:"storage" help:"storage | atlas_doc_format (alias: adf) | view | markdown (alias: md, derived from storage)."`
+	BodyFormat     string   `default:"storage" aliases:"format" help:"storage | atlas_doc_format (alias: adf) | view | markdown (alias: md, derived from storage)."`
 	ResolveAuthors bool     `name:"resolve-authors" help:"Resolve author_id to an author_name sibling (best-effort, one cached user lookup per unique author)."`
 }
 
@@ -669,7 +669,7 @@ type PageCreateCmd struct {
 	Space      string `required:"" help:"Space key or URL."`
 	Title      string `required:"" help:"Page title."`
 	Parent     string `help:"Parent page ID or URL."`
-	BodyFormat string `help:"storage, adf, or markdown (required when piping a body)."`
+	BodyFormat string `aliases:"format" help:"storage, adf, or markdown (required when piping a body)."`
 	Live       bool   `help:"Create a live doc (subtype=live) instead of a regular page."`
 }
 
@@ -761,7 +761,7 @@ type PageUpdateCmd struct {
 	Ref                           string `arg:"" name:"id-or-url" help:"Page ID or URL."`
 	IfVersion                     int    `name:"if-version" required:"" help:"Expected current version; the update is rejected if it differs."`
 	Title                         string `help:"New title (keeps current if omitted)."`
-	BodyFormat                    string `help:"storage, adf, or markdown (required when piping a body)."`
+	BodyFormat                    string `aliases:"format" help:"storage, adf, or markdown (required when piping a body)."`
 	AllowUnresolvedInlineComments bool   `name:"allow-unresolved-inline-comments" help:"Proceed even if the page has unresolved inline comments whose anchors this write may destroy. Skips the inline-comment inspection entirely; does not bypass --if-version or other checks."`
 }
 
