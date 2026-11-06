@@ -171,11 +171,13 @@ site per invocation). Each row echoes its `input`.
 URLs and adds `source_body_format`. Bad ids or unreadable pages appear inline on
 stdout and bump `_meta.error_count`.
 
-In derived Markdown, a page link renders as `[label](Page Title)` (the target is
-the title, not a URL), a user mention as `@<account-id>` (no lookup), and a
-macro with no rich-text body as a placeholder `[macro: <name>]` or
-`[macro: <name> <Page Title>]`; panel-like macros have their body converted in
-place and code macros become fenced blocks. A body the converter cannot parse
+In derived Markdown, a page link renders as `[label](Title)` (the target is the
+page title, not a URL; a title with spaces or parentheses is wrapped as
+`[label](<Page Title>)`), a user mention as `@<account-id>` (no lookup), a
+status macro as `[status: <title>]`, and any other macro with no rich-text
+body as a placeholder `[macro: <name>]` or `[macro: <name> <Page Title>]`;
+panel-like macros have their body converted in place and code macros become
+fenced blocks. A body the converter cannot parse
 is an inline `markdown_conversion_failed` error (exit 1), never a truncated
 body; fall back to `--body-format storage` or `view` for that page.
 

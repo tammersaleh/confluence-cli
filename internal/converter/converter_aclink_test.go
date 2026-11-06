@@ -31,7 +31,7 @@ func TestConvert_ACLink(t *testing.T) {
 		{
 			name:  "page link without body uses title",
 			input: `<p><ac:link><ri:page ri:content-title="Target Page" /></ac:link></p>`,
-			want:  "[Target Page](Target Page)\n",
+			want:  "[Target Page](<Target Page>)\n",
 		},
 		{
 			name:  "plain text link body",
@@ -41,7 +41,7 @@ func TestConvert_ACLink(t *testing.T) {
 		{
 			name:  "page link in heading",
 			input: `<h2><ac:link><ri:page ri:content-title="Compute Infrastructure" /><ac:link-body>Compute Infrastructure</ac:link-body></ac:link></h2>`,
-			want:  "## [Compute Infrastructure](Compute Infrastructure)\n",
+			want:  "## [Compute Infrastructure](<Compute Infrastructure>)\n",
 		},
 		{
 			name:  "user mention",
@@ -72,6 +72,11 @@ func TestConvert_ACLink(t *testing.T) {
 			name:  "link with no resource emits label",
 			input: `<p><ac:link ac:anchor="sec"><ac:link-body>Section</ac:link-body></ac:link></p>`,
 			want:  "Section\n",
+		},
+		{
+			name:  "page title with parentheses is wrapped",
+			input: `<p><ac:link><ri:page ri:content-title="Plan(v2)" /></ac:link></p>`,
+			want:  "[Plan(v2)](<Plan(v2)>)\n",
 		},
 		{
 			name:  "nested formatting inside link body",
@@ -136,6 +141,21 @@ func TestConvert_UnknownMacro(t *testing.T) {
 			name:  "nameless macro",
 			input: `<ac:structured-macro></ac:structured-macro><p>after</p>`,
 			want:  "[macro: unknown]\n\nafter\n",
+		},
+		{
+			name:  "status macro emits its title",
+			input: `<p><ac:structured-macro ac:name="status"><ac:parameter ac:name="colour">Green</ac:parameter><ac:parameter ac:name="title">On Track</ac:parameter></ac:structured-macro></p>`,
+			want:  "[status: On Track]\n",
+		},
+		{
+			name:  "status macro without title falls back to placeholder",
+			input: `<p><ac:structured-macro ac:name="status"><ac:parameter ac:name="colour">Green</ac:parameter></ac:structured-macro></p>`,
+			want:  "[macro: status]\n",
+		},
+		{
+			name:  "title parameter of other macros stays suppressed",
+			input: `<p><ac:structured-macro ac:name="jira"><ac:parameter ac:name="title">Leak</ac:parameter></ac:structured-macro></p>`,
+			want:  "[macro: jira]\n",
 		},
 		{
 			name:  "rich text body is converted, parameters dropped",

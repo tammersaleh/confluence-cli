@@ -590,8 +590,8 @@ hierarchy is preserved as a directory structure.
 The same converter serves `page get --body-format markdown`. Confluence-specific
 elements render as:
 
-- `<ac:link>` - label from `ac:link-body` or `ac:plain-text-link-body`. `ri:page` becomes `[label](Page Title)` (the target is the page title, not a URL). `ri:user` becomes `@<account-id>`, no lookup. `ri:attachment` becomes `[label](href)` resolved like images. `ri:url` becomes `[label](value)`. An anchor-only link emits the label as text.
-- `<ac:structured-macro>` - a macro with an `ac:rich-text-body` (info, note, panel, expand) has its body converted in place. A macro with an `ac:plain-text-body` (code, noformat) becomes a fenced code block. Any other macro becomes `[macro: <name>]`, or `[macro: <name> <Page Title>]` when it references a page (excerpt-include). Parameter text never appears in the output.
+- `<ac:link>` - label from `ac:link-body` or `ac:plain-text-link-body`. `ri:page` becomes `[label](Title)` (the target is the page title, not a URL; a title with spaces or parentheses is wrapped as `[label](<Page Title>)`). `ri:user` becomes `@<account-id>`, no lookup. `ri:attachment` becomes `[label](href)` resolved like images. `ri:url` becomes `[label](value)`. An anchor-only link emits the label as text.
+- `<ac:structured-macro>` - a macro with an `ac:rich-text-body` (info, note, panel, expand) has its body converted in place. A macro with an `ac:plain-text-body` (code, noformat) becomes a fenced code block. The `status` macro becomes `[status: <title>]`. Any other macro becomes `[macro: <name>]`, or `[macro: <name> <Page Title>]` when it references a page (excerpt-include). No other parameter text appears in the output.
 - Table cells keep inline formatting, links, and mentions on one line.
 
 A body the converter cannot parse is an error, never a truncated body: `page get`

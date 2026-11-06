@@ -407,7 +407,15 @@ func (c *converter) writeACLink(kind, label, target string) {
 			label = target
 		}
 		c.buf.WriteString("[" + label + "](" + c.resolveAttachment(target) + ")")
-	case "ri:page", "ri:url":
+	case "ri:page":
+		if label == "" {
+			label = target
+		}
+		if label == "" {
+			return
+		}
+		c.buf.WriteString("[" + label + "](" + linkDestination(target) + ")")
+	case "ri:url":
 		if label == "" {
 			label = target
 		}
@@ -418,6 +426,16 @@ func (c *converter) writeACLink(kind, label, target string) {
 	default:
 		c.buf.WriteString(label)
 	}
+}
+
+// linkDestination makes a page title a valid CommonMark link destination: a
+// title with spaces or parentheses is wrapped in angle brackets, a plain title
+// stays bare.
+func linkDestination(title string) string {
+	if strings.ContainsAny(title, " ()") {
+		return "<" + title + ">"
+	}
+	return title
 }
 
 func (c *converter) handleImage(decoder *xml.Decoder) error {
@@ -451,17 +469,17 @@ func (c *converter) handleImage(decoder *xml.Decoder) error {
 // handleMacro renders <ac:structured-macro>. A macro with an ac:rich-text-body
 // has that body converted in place and its parameters dropped. A macro with an
 // ac:plain-text-body (the code macro and its relatives) becomes a fenced code
-// block, using the "language" parameter as the info string. Any other macro
-// becomes a placeholder `[macro: <name>]`, with the title of an ri:page found
-// among its parameters appended when present. Parameter text is never emitted
-// as body text.
+// block, using the "language" parameter as the info string. The status macro
+// becomes `[status: <title>]`. Any other macro becomes a placeholder
+// `[macro: <name>]`, with the title of an ri:page found among its parameters
+// appended when present. No other parameter text is emitted as body text.
 func (c *converter) handleMacro(elem xml.StartElement, decoder *xml.Decoder) error {
 	name := getAttr(elem.Attr, "ac:name")
 	if name == "" {
 		name = "unknown"
 	}
 
-	var lang, code, pageTitle string
+	var lang, code, pageTitle, statusTitle string
 	hasCode, hasRichBody := false, false
 	depth := 1
 
@@ -479,8 +497,15 @@ func (c *converter) handleMacro(elem xml.StartElement, decoder *xml.Decoder) err
 				if err != nil {
 					return err
 				}
-				if getAttr(t.Attr, "ac:name") == "language" {
+				switch getAttr(t.Attr, "ac:name") {
+				case "language":
 					lang = strings.TrimSpace(text)
+				case "title":
+					// The status macro is the one allowlisted parameter: its
+					// title is the visible lozenge text.
+					if name == "status" {
+						statusTitle = strings.TrimSpace(text)
+					}
 				}
 				if pageTitle == "" {
 					pageTitle = title
@@ -508,6 +533,11 @@ func (c *converter) handleMacro(elem xml.StartElement, decoder *xml.Decoder) err
 					c.buf.WriteString("```" + lang + "\n")
 					c.buf.WriteString(strings.TrimSpace(code))
 					c.buf.WriteString("\n```\n")
+				case statusTitle != "":
+					c.buf.WriteString("[status: " + statusTitle + "]")
+					if !c.inParagraph {
+						c.buf.WriteString("\n\n")
+					}
 				default:
 					c.buf.WriteString("[macro: " + name)
 					if pageTitle != "" {
