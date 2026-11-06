@@ -714,7 +714,7 @@ func resolveWriteBody(cli *CLI, bodyFormat string) (*confluence.WriteBody, error
 type PageCreateCmd struct {
 	Space      string `required:"" help:"Space key or URL."`
 	Title      string `required:"" help:"Page title."`
-	Parent     string `help:"Parent page ID or URL."`
+	Parent     string `help:"Parent page or folder ID or URL."`
 	BodyFormat string `help:"storage, adf, or markdown (required when piping a body)."`
 	Live       bool   `help:"Create a live doc (subtype=live) instead of a regular page."`
 }
@@ -730,14 +730,16 @@ func (c *PageCreateCmd) Run(cli *CLI) error {
 		return err
 	}
 
-	// Resolve --parent to a bare page id. A parent URL must live on the same
-	// site as the space.
+	// Resolve --parent to a bare id. The parent may be a page or a folder (POST
+	// /pages accepts either as parentId; verified live). A parent URL must live
+	// on the same site as the space.
 	parentID := ""
 	if c.Parent != "" {
-		pSite, pID, perr := resolvePageRef(cli, c.Parent)
+		pr, perr := resolveContainerRef(cli, c.Parent)
 		if perr != nil {
 			return perr
 		}
+		pSite, pID := pr.siteHint, pr.id
 		if pSite != "" && siteHint != "" && pSite != siteHint {
 			return &output.Error{
 				Err:    "invalid_input",

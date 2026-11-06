@@ -65,6 +65,13 @@ func folderServer(t *testing.T, fw *folderWorld) *httptest.Server {
 		switch {
 		case p == "/wiki/api/v2/spaces":
 			_, _ = w.Write([]byte(`{"results":[{"id":"s1","key":"ENG","name":"Engineering"}]}`))
+		case p == "/wiki/api/v2/pages" && r.Method == http.MethodPost:
+			var payload map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			fw.mu.Lock()
+			fw.created = payload
+			fw.mu.Unlock()
+			_, _ = w.Write([]byte(`{"id":"555","title":"New","spaceId":"s1","parentId":"777","version":{"number":1},"_links":{"webui":"/spaces/T/pages/555/N"}}`))
 		case p == "/wiki/api/v2/folders" && r.Method == http.MethodPost:
 			var payload map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&payload)
@@ -515,5 +522,25 @@ func TestFolderDelete_WithYesAndPerItem404(t *testing.T) {
 	}
 	if len(fw.deleted) != 1 {
 		t.Errorf("deleted = %v", fw.deleted)
+	}
+}
+
+// --- page create with a folder parent ---
+
+func TestPageCreate_FolderURLParent(t *testing.T) {
+	fw := &folderWorld{}
+	c, out, _, server := newFolderCLI(t, fw)
+
+	// POST /pages accepts a folder parentId (verified live), so a folder URL is
+	// a valid --parent for page create.
+	cmd := &PageCreateCmd{Space: "ENG", Title: "New", Parent: server.URL + "/wiki/spaces/T/folder/777"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if fw.created["parentId"] != "777" {
+		t.Errorf("payload = %v", fw.created)
+	}
+	if r := parseLines(t, out.String())[0]; r["parent_id"] != "777" {
+		t.Errorf("row = %v", r)
 	}
 }
