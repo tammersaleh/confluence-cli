@@ -448,10 +448,12 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 		return err
 	}
 
-	// pair binds each caller input to the page id resolved from it.
+	// pair binds each caller input to the page id resolved from it. bare marks
+	// an untyped id, the only kind that might turn out to be a folder.
 	type pair struct {
 		input  string
 		pageID string
+		bare   bool
 	}
 	var pairs []pair
 	var urlRefs []confluenceurl.Ref
@@ -470,7 +472,7 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 		}
 		if !matched {
 			// Bare id: no site info.
-			pairs = append(pairs, pair{input: arg, pageID: arg})
+			pairs = append(pairs, pair{input: arg, pageID: arg, bare: true})
 			continue
 		}
 		if r.Kind == confluenceurl.KindFolder {
@@ -534,17 +536,22 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 		pd, err := client.GetPage(ctx, pr.pageID, format)
 		if err != nil {
 			oErr := cli.ClassifyError(err)
-			if errors.Is(err, confluence.ErrPageNotFound) {
+			if pr.bare && errors.Is(err, confluence.ErrPageNotFound) {
 				// A bare id may be a folder, which has its own v2 resource. One
 				// probe tells the caller which command to use instead of a
-				// misleading page_not_found.
-				if _, ferr := client.GetFolder(ctx, pr.pageID); ferr == nil {
+				// misleading page_not_found. A folder 404 keeps the page error;
+				// any other folder failure is the real answer.
+				switch _, ferr := client.GetFolder(ctx, pr.pageID); {
+				case ferr == nil:
 					oErr = &output.Error{
 						Err:    "not_a_page",
 						Detail: fmt.Sprintf("%s is a folder, not a page", pr.pageID),
 						Hint:   fmt.Sprintf("Use 'confluence folder get %s' to read the folder, or 'confluence page children %s' to list its contents.", pr.pageID, pr.pageID),
 						Code:   output.ExitGeneral,
 					}
+				case errors.Is(ferr, confluence.ErrFolderNotFound):
+				default:
+					oErr = cli.ClassifyError(ferr)
 				}
 			}
 			oErr.Input = pr.input
@@ -725,31 +732,34 @@ func (c *PageCreateCmd) Run(cli *CLI) error {
 		return err
 	}
 
-	client, _, err := cli.NewClientForSite(siteHint)
-	if err != nil {
-		return err
-	}
-
 	// Resolve --parent to a bare id. The parent may be a page or a folder (POST
 	// /pages accepts either as parentId; verified live). A parent URL must live
-	// on the same site as the space.
+	// on the same site as the space, and selects the site when --space is a
+	// bare key.
 	parentID := ""
 	if c.Parent != "" {
 		pr, perr := resolveContainerRef(cli, c.Parent)
 		if perr != nil {
 			return perr
 		}
-		pSite, pID := pr.siteHint, pr.id
-		if pSite != "" && siteHint != "" && pSite != siteHint {
+		if pr.siteHint != "" && siteHint != "" && pr.siteHint != siteHint {
 			return &output.Error{
 				Err:    "invalid_input",
 				Detail: "parent is on a different site than --space",
-				Hint:   "Pass a parent page on the same site as the space.",
+				Hint:   "Pass a parent on the same site as the space.",
 				Input:  c.Parent,
 				Code:   output.ExitGeneral,
 			}
 		}
-		parentID = pID
+		if siteHint == "" {
+			siteHint = pr.siteHint
+		}
+		parentID = pr.id
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
 	}
 
 	body, err := resolveWriteBody(cli, c.BodyFormat)

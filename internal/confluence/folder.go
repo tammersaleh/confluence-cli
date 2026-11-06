@@ -12,9 +12,10 @@ import (
 )
 
 // folderResponse is the v2 folder shape (GET/POST /wiki/api/v2/folders).
-// createdAt is a RawMessage because the live API returns it as epoch
-// milliseconds (a JSON number) even though the docs describe an ISO string;
-// normalizeTimestamp accepts both.
+// The timestamps are RawMessages because the live API returns the top-level
+// createdAt as epoch milliseconds (a JSON number) even though the docs describe
+// an ISO string. normalizeTimestamp accepts both, and version.createdAt gets the
+// same treatment in case it ever follows suit.
 type folderResponse struct {
 	ID         string          `json:"id"`
 	Title      string          `json:"title"`
@@ -25,8 +26,8 @@ type folderResponse struct {
 	AuthorID   string          `json:"authorId"`
 	CreatedAt  json.RawMessage `json:"createdAt"`
 	Version    struct {
-		Number    int    `json:"number"`
-		CreatedAt string `json:"createdAt"`
+		Number    int             `json:"number"`
+		CreatedAt json.RawMessage `json:"createdAt"`
 	} `json:"version"`
 	Links struct {
 		WebUI string `json:"webui"`
@@ -44,7 +45,7 @@ func (r folderResponse) toFolder(c *client) *Folder {
 		Version:    r.Version.Number,
 		AuthorID:   r.AuthorID,
 		CreatedAt:  normalizeTimestamp(r.CreatedAt),
-		ModifiedAt: r.Version.CreatedAt,
+		ModifiedAt: normalizeTimestamp(r.Version.CreatedAt),
 		WebURL:     c.absWebURL(r.Links.WebUI),
 	}
 }

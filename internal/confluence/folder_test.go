@@ -61,6 +61,22 @@ func TestClient_GetFolder(t *testing.T) {
 	}
 }
 
+func TestClient_GetFolder_NumericVersionCreatedAt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"1","title":"F","createdAt":1790626470759,"version":{"number":2,"createdAt":1790626470759}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	f, err := c.GetFolder(context.Background(), "1")
+	if err != nil {
+		t.Fatalf("GetFolder() error: %v", err)
+	}
+	if f.ModifiedAt != "2026-09-28T20:14:30.759Z" {
+		t.Errorf("ModifiedAt = %q", f.ModifiedAt)
+	}
+}
+
 func TestClient_GetFolder_ISOCreatedAt(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"id":"1","title":"F","createdAt":"2024-01-15T10:30:00.000Z","version":{"number":2}}`))
@@ -90,6 +106,11 @@ func TestClient_GetFolder_NotFound(t *testing.T) {
 	}
 	if errors.Is(err, ErrPageNotFound) {
 		t.Fatalf("ErrFolderNotFound must not match ErrPageNotFound")
+	}
+	// The transport error is kept so the CLI can report the endpoint.
+	var se *StatusError
+	if !errors.As(err, &se) || se.Endpoint != "/wiki/api/v2/folders/777" || se.StatusCode != 404 {
+		t.Fatalf("expected StatusError for /wiki/api/v2/folders/777, got %#v", err)
 	}
 }
 
@@ -191,6 +212,27 @@ func TestClient_GetFolderAncestors(t *testing.T) {
 	}
 	if len(anc) != 2 || anc[0].ID != "1" || anc[1].Type != "folder" {
 		t.Errorf("ancestors = %+v", anc)
+	}
+}
+
+func TestClient_GetFolderAncestors_Paginated(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cursor") == "C2" {
+			w.Write([]byte(`{"results": [{"id": "3", "type": "page"}], "_links": {}}`))
+			return
+		}
+		w.Write([]byte(`{"results": [{"id": "1", "type": "page"}, {"id": "2", "type": "folder"}], "_links": {"next": "` + srv.URL + `/wiki/api/v2/folders/777/ancestors?cursor=C2"}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "test@example.com", "api-token")
+	anc, err := c.GetFolderAncestors(context.Background(), "777")
+	if err != nil {
+		t.Fatalf("GetFolderAncestors() error: %v", err)
+	}
+	if len(anc) != 3 || anc[2].ID != "3" {
+		t.Errorf("ancestors = %+v, want 3 drained across pages", anc)
 	}
 }
 

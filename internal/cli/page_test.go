@@ -2162,8 +2162,8 @@ func TestPageMove_CrossSpace(t *testing.T) {
 	if r["moved"] != true || r["previous_parent_id"] != "50" || r["parent_id"] != "200" {
 		t.Errorf("row unexpected: %v", r)
 	}
-	if r["previous_space_id"] != "s1" || r["space_id"] != "s2" {
-		t.Errorf("space ids unexpected: %v", r)
+	if r["previous_space_id"] != "s1" || r["space_id"] != "s2" || r["parent_type"] != "page" {
+		t.Errorf("space ids / parent_type unexpected: %v", r)
 	}
 	// The v1 move does not bump the version.
 	if r["previous_version"] != float64(5) || r["version"] != float64(5) {
@@ -2246,8 +2246,8 @@ func TestPageMove_NoopWhenAlreadyChild(t *testing.T) {
 		t.Errorf("no-op move must not PUT")
 	}
 	lines := parseLines(t, out.String())
-	if lines[0]["moved"] != false || lines[0]["version"] != float64(5) {
-		t.Errorf("expected moved=false version=5, got %v", lines[0])
+	if lines[0]["moved"] != false || lines[0]["version"] != float64(5) || lines[0]["parent_type"] != "page" {
+		t.Errorf("expected moved=false version=5 parent_type=page, got %v", lines[0])
 	}
 }
 

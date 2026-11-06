@@ -37,6 +37,7 @@ type folderWorld struct {
 	v2Puts   int
 	pageForb bool // when set, GET /pages/100 returns 403
 	cycle    bool // when set, folder 777 reports page 100 among its ancestors
+	fldForb  bool // when set, GET /folders/777 returns 403
 }
 
 func (fw *folderWorld) record(p string) {
@@ -80,6 +81,10 @@ func folderServer(t *testing.T, fw *folderWorld) *httptest.Server {
 			fw.mu.Unlock()
 			_, _ = w.Write([]byte(folderFixture))
 		case p == "/wiki/api/v2/folders/777" && r.Method == http.MethodGet:
+			if fw.fldForb {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
 			_, _ = w.Write([]byte(folderFixture))
 		case p == "/wiki/api/v2/folders/777" && r.Method == http.MethodDelete:
 			fw.mu.Lock()
@@ -541,6 +546,62 @@ func TestPageCreate_FolderURLParent(t *testing.T) {
 		t.Errorf("payload = %v", fw.created)
 	}
 	if r := parseLines(t, out.String())[0]; r["parent_id"] != "777" {
+		t.Errorf("row = %v", r)
+	}
+}
+
+func TestPageGet_PageURL404DoesNotProbeFolder(t *testing.T) {
+	fw := &folderWorld{}
+	c, out, _, server := newFolderCLI(t, fw)
+
+	// A typed page URL is a page by construction: a 404 is page_not_found with
+	// no folder probe.
+	_ = (&PageGetCmd{Refs: []string{server.URL + "/wiki/spaces/T/pages/999"}, BodyFormat: "storage"}).Run(c)
+	if lines := parseLines(t, out.String()); lines[0]["error"] != "page_not_found" {
+		t.Errorf("row = %v", lines[0])
+	}
+	if fw.count("/folders/") != 0 {
+		t.Errorf("typed page URL must not probe folders: %v", fw.paths)
+	}
+}
+
+func TestPageGet_FolderProbeErrorSurfaces(t *testing.T) {
+	fw := &folderWorld{fldForb: true}
+	c, out, _, _ := newFolderCLI(t, fw)
+
+	// Page 404 then folder 403: the folder error is the real answer, not
+	// page_not_found.
+	_ = (&PageGetCmd{Refs: []string{"777"}, BodyFormat: "storage"}).Run(c)
+	if lines := parseLines(t, out.String()); lines[0]["error"] != "forbidden" {
+		t.Errorf("row = %v", lines[0])
+	}
+}
+
+func TestPageCreate_ParentURLSelectsSite(t *testing.T) {
+	fw := &folderWorld{}
+	c, out, _, server := newFolderCLI(t, fw)
+	// Credentials without a site: only the parent URL names it.
+	t.Setenv("CONFLUENCE_SITE", "")
+
+	cmd := &PageCreateCmd{Space: "ENG", Title: "New", Parent: server.URL + "/wiki/spaces/T/folder/777"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if r := parseLines(t, out.String())[0]; r["parent_id"] != "777" {
+		t.Errorf("row = %v", r)
+	}
+}
+
+func TestFolderCreate_ParentURLSelectsSite(t *testing.T) {
+	fw := &folderWorld{}
+	c, out, _, server := newFolderCLI(t, fw)
+	t.Setenv("CONFLUENCE_SITE", "")
+
+	cmd := &FolderCreateCmd{Space: "ENG", Title: "Nested", Parent: server.URL + "/wiki/spaces/T/pages/100"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if r := parseLines(t, out.String())[0]; r["id"] != "777" {
 		t.Errorf("row = %v", r)
 	}
 }
