@@ -284,7 +284,9 @@ confluence attachment download att987 --out ./diagram.png
 
 CQL search. The positional is the CQL query. Site-wide (from `--site` or the
 single stored default). Page with `--limit`/`--cursor`, or drain with `--all`.
-Rows carry `id`, `title`, `type`, `space_key`, `excerpt`, `url`.
+Rows carry `id`, `title`, `type`, `space_key`, `excerpt`, `url`. Use
+`space_key` (the real key) for `--space` or CQL; the `/spaces/<X>/` segment of
+`url` is the space alias and can differ from the key.
 
 ```bash
 confluence search 'type = page AND text ~ "runbook"'
