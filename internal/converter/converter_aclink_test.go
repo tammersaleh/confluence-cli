@@ -79,6 +79,21 @@ func TestConvert_ACLink(t *testing.T) {
 			want:  "[Plan(v2)](<Plan(v2)>)\n",
 		},
 		{
+			name:  "page title with angle brackets and backslash is escaped",
+			input: `<p><ac:link><ri:page ri:content-title="A&lt;B&gt;C\D" /></ac:link></p>`,
+			want:  "[A<B>C\\D](<A\\<B\\>C\\\\D>)\n",
+		},
+		{
+			name:  "page title starting with angle bracket is wrapped",
+			input: `<p><ac:link><ri:page ri:content-title="&lt;draft" /></ac:link></p>`,
+			want:  "[<draft](<\\<draft>)\n",
+		},
+		{
+			name:  "page title with tab becomes a space in the destination",
+			input: "<p><ac:link><ri:page ri:content-title=\"A\tB\" /></ac:link></p>",
+			want:  "[A\tB](<A B>)\n",
+		},
+		{
 			name:  "nested formatting inside link body",
 			input: `<p><ac:link><ri:page ri:content-title="X" /><ac:link-body><strong>Bold</strong> label</ac:link-body></ac:link></p>`,
 			want:  "[Bold label](X)\n",

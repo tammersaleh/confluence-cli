@@ -428,12 +428,19 @@ func (c *converter) writeACLink(kind, label, target string) {
 	}
 }
 
-// linkDestination makes a page title a valid CommonMark link destination: a
-// title with spaces or parentheses is wrapped in angle brackets, a plain title
-// stays bare.
+// destinationEscaper escapes the characters CommonMark forbids inside an
+// angle-bracketed link destination; line breaks and tabs become spaces.
+var destinationEscaper = strings.NewReplacer(
+	`\`, `\\`, "<", `\<`, ">", `\>`,
+	"\n", " ", "\r", " ", "\t", " ",
+)
+
+// linkDestination makes a page title a valid CommonMark link destination. A
+// plain title stays bare; one with whitespace, parentheses, angle brackets, or
+// a backslash is escaped and wrapped in angle brackets.
 func linkDestination(title string) string {
-	if strings.ContainsAny(title, " ()") {
-		return "<" + title + ">"
+	if strings.ContainsAny(title, " ()<>\\\n\r\t") {
+		return "<" + destinationEscaper.Replace(title) + ">"
 	}
 	return title
 }
