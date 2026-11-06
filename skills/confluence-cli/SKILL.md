@@ -184,6 +184,17 @@ confluence page get 123456 --resolve-authors
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 
+Output is JSONL: one id still emits two lines, the row and the `_meta`
+trailer. To pull a single field for a pipeline, slurp or take the first line.
+Bare `jq -r .body` prints the body followed by a `null` line (the trailer has
+no `.body`), and piping that into `page update` is refused (see "Bodies that
+look right but fail").
+
+```bash
+confluence page get 123456 | jq -s '.[0].body'
+confluence page get 123456 | head -1 | jq -r .body
+```
+
 ### page children
 
 Direct children of a page (numeric id or page URL). Page with
@@ -476,6 +487,14 @@ These pass a casual eye but are rejected locally as `invalid_body`:
 - An ADF text node without a `text` string:
   `{"type":"text"}` inside `content`. A text node must be
   `{"type":"text","text":"..."}`.
+
+One more is rejected as `invalid_input`, because it is a piping mistake rather
+than a malformed body: a `storage` or `markdown` body whose last line is a bare
+`null` (or `true`/`false`) right after a `>`. That is the `_meta` trailer
+leaking through `page get | jq -r .body`. The hint names the fix:
+`jq -s '.[0].body'` or `head -1 | jq -r .body`. A literal `<p>null</p>` is
+content and passes. The same mistake on an `adf` body fails JSON parsing as
+`invalid_body`.
 
 A correct minimal ADF doc:
 

@@ -64,6 +64,12 @@ doc rooted at `{"type":"doc","version":1,"content":[...]}`), or `markdown`/`md`
 before the API sees it. Markdown fenced code becomes a plain preformatted block,
 not a Confluence code macro, and raw HTML embedded in the Markdown is escaped.
 
+Because every command's output is JSONL with a `_meta` trailer line, bare
+`jq -r .body` on `page get` output appends a `null` line. Extract one field
+with `jq -s '.[0].body'` or `head -1 | jq -r .body`. A `storage` or `markdown`
+body ending in a bare `null`/`true`/`false` line right after a `>` is refused
+as `invalid_input` with a hint naming the fix; `<p>null</p>` passes.
+
 ### version
 
 ```bash
@@ -188,6 +194,10 @@ confluence page get 123456
 confluence page get 123456 --body-format markdown
 confluence page get 123456 --resolve-authors
 ```
+
+Output is JSONL: even one id emits the row plus the `_meta` trailer. To
+extract a single field, use `jq -s '.[0].body'` or `head -1 | jq -r .body`,
+not bare `jq -r .body` (which appends a `null` line from the trailer).
 
 ```jsonl
 {"input":"123456","id":"123456","title":"API Design","space_id":"98765","version":5,"author_id":"a1","created_at":"2024-03-01T00:00:00.000Z","created_at_iso":"2024-03-01T00:00:00Z","modified_at":"2024-06-20T14:45:00.000Z","modified_at_iso":"2024-06-20T14:45:00Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456","body":"<p>See the design.</p>","body_format":"storage"}

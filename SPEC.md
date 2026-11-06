@@ -104,6 +104,8 @@ Write commands that carry page or comment content (`page create`, `page update`,
 
 The body is validated locally before the API sees it; a malformed fragment or ADF doc fails with `invalid_body` and nothing is written.
 
+Feeding one command's output into another needs care: every command's stdout is JSONL with a `_meta` trailer line, so `page get <id> | jq -r .body` emits the body followed by a `null` line (jq's `-r` on the trailer's missing `.body`). Extract a single field with `jq -s '.[0].body'` or `head -1 | jq -r .body`. As a guard, a `storage` or `markdown` body whose last line is exactly `null`, `true`, or `false` and whose preceding content ends with `>` fails with `invalid_input` and a hint naming the fix; `<p>null</p>` is legitimate content and passes. An `adf` body with the same trailing line fails JSON parsing (`invalid_body`).
+
 ### version
 
 Emits the build version, then the trailer.
@@ -254,6 +256,8 @@ A `subtype` field appears only when the page is a live doc (value `live`); regul
 Each row carries `status` (`current`, `draft`, ...). `parent_id` and `parent_type` (`page`, `folder`, `database`) appear when the page has a parent; a space root omits both. Right after a move the parent fields can lag the write by a few minutes server-side; `page children` on the destination reflects the move first.
 
 Per-item errors (bad id, no permission) appear inline on stdout and bump `_meta.error_count`.
+
+Output is JSONL: a single-id fetch still emits two lines, the row and the `_meta` trailer. To extract one field for a pipeline, use `jq -s '.[0].body'` or `head -1 | jq -r .body`; bare `jq -r .body` appends a `null` line from the trailer (see "Body input for writes").
 
 ```jsonl
 $ confluence page get 123456
