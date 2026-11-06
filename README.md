@@ -7,7 +7,7 @@ commands are non-interactive and scriptable, built for LLM agents and CI.
 The read and write surface ships today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
 `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`,
-`attachment list`,
+`folder get`, `folder create`, `folder delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
 `user info`. The full command surface is implemented. See `SPEC.md` for the full
@@ -199,17 +199,21 @@ Bad ids or pages you can't read appear inline on stdout and bump
 
 ### page children
 
-List a page's direct children. The argument is a numeric page id or a page URL.
-Page through with `--limit`/`--cursor`, or fetch everything with `--all`. Rows
-carry `id`, `title`, and `type`.
+List the direct children of a page or a folder: every content type under it,
+each tagged with `type` (`page`, `folder`, `database`, ...). The argument is a
+numeric id, a page URL, or a folder URL (`…/wiki/spaces/KEY/folder/123`). A bare
+id is tried as a page first, then as a folder. Page through with
+`--limit`/`--cursor`, or fetch everything with `--all`. Rows carry `id`, `title`,
+and `type`.
 
 ```bash
 confluence page children 123400
-confluence page children 123400 --all
+confluence page children 777000 --all
 ```
 
 ```jsonl
 {"id":"123456","title":"API Design","type":"page"}
+{"id":"777000","title":"Pillars","type":"folder"}
 {"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
 ```
 
@@ -270,7 +274,7 @@ confluence page tree --space ENG
 ### page create
 
 Create a page. `--space` takes a bare key or a space/page URL; `--parent` nests
-the page under an existing page on the same site. The body is read from stdin;
+the page under an existing page or folder on the same site. The body is read from stdin;
 `--body-format` is required only when a non-empty body is piped. With no stdin
 (or empty input), the page is created empty. `--live` creates a live doc
 (subtype `live`) instead of a regular page. The row carries `id`, `title`,
@@ -318,23 +322,26 @@ title-only update (no piped body) re-sends the exact ADF and is not guarded.
 
 ### page move
 
-Move a page under a different parent, in the same space or another space,
-preserving the page ID, history, comments, and attachments. `--if-version`
-guards the source version. Self-parenting and cycles are `invalid_move`.
-Already-a-child returns `moved:false` with no write.
+Move a page under a different parent (a page or a folder), in the same space
+or another space, preserving the page ID, history, comments, and attachments.
+`--if-version` guards the source version. Self-parenting and cycles are
+`invalid_move`. Already-a-child returns `moved:false` with no write. Rows carry
+`parent_type` (`page` or `folder`).
 
-A same-space move re-sends the exact ADF and touches only the parent, so it does
-not disturb inline-comment anchors; it bumps the version. A cross-space move uses
-the v1 move endpoint (the only public API for it): the body is untouched and the
-version does not change, so `--if-version` is checked before the write but not
-at write time. Restrictions across a cross-space move are unverified.
+A same-space move to a page re-sends the exact ADF and touches only the parent,
+so it does not disturb inline-comment anchors; it bumps the version. A
+cross-space move, or a move into a folder, uses the v1 move endpoint (the only
+public API for either): the body is untouched and the version does not change,
+so `--if-version` is checked before the write but not at write time.
+Restrictions across a cross-space move are unverified.
 
 ```bash
 confluence page move 123456 --parent 200000 --if-version 5
+confluence page move 123456 --parent 777000 --if-version 5   # into a folder
 ```
 
 ```jsonl
-{"id":"123456","title":"API Design","previous_space_id":"98765","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"id":"123456","title":"API Design","previous_space_id":"98765","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","parent_type":"page","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
 {"_meta":{"has_more":false}}
 ```
 
@@ -375,6 +382,50 @@ confluence page convert-to-live 123456
 
 ```jsonl
 {"input":"123456","id":"123456","converted":true}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### folder get
+
+Fetch one or more folders by numeric id or folder URL
+(`…/wiki/spaces/KEY/folder/123`). Folders are their own v2 content type with no
+body; `page get` on a folder id fails with `not_a_page`. Rows echo `input` and
+carry `id`, `type:"folder"`, `title`, `space_id`, `status`, `version`,
+`author_id`, `created_at`, `modified_at`, `web_url`, and `parent_id`/`parent_type`
+when the folder has a parent. Per-item errors go inline.
+
+```bash
+confluence folder get 777000
+```
+
+```jsonl
+{"input":"777000","id":"777000","type":"folder","title":"Pillars","space_id":"98765","status":"current","parent_id":"123400","parent_type":"page","version":1,"author_id":"a1","created_at":"2026-09-28T20:14:30.759Z","created_at_iso":"2026-09-28T20:14:30Z","modified_at":"2026-09-28T20:14:30.759Z","modified_at_iso":"2026-09-28T20:14:30Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/folder/777000"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### folder create
+
+Create a folder. `--space` takes a bare key or a space/page URL; `--parent`
+nests it under a page or folder on the same site (omit for the space root). The
+row has the `folder get` shape without `input`.
+
+```bash
+confluence folder create --space ENG --title Pillars --parent 123400
+```
+
+### folder delete
+
+Trash one or more folders. Same contract as `page delete`: `--yes` required,
+`--dry-run` previews, `confirmation_required` otherwise. Empty the folder first;
+what happens to its children is unverified.
+
+```bash
+confluence folder delete 777000 --dry-run
+confluence folder delete 777000 --yes
+```
+
+```jsonl
+{"input":"777000","id":"777000","deleted":true,"delete_mode":"trash"}
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: confluence-cli
-description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), inspect spaces (space info/list), attachments, CQL search, comments, labels, users, and write content (page create/update/move/delete, attachment upload, comment add including inline, label add/remove) with storage, ADF, or Markdown bodies on stdin"
+description: "Agent-first Confluence CLI: sync spaces to Markdown, read pages (page list/get/children/ancestors/tree), folders (folder get/create/delete), inspect spaces (space info/list), attachments, CQL search, comments, labels, users, and write content (page create/update/move/delete, attachment upload, comment add including inline, label add/remove) with storage, ADF, or Markdown bodies on stdin"
 argument-hint: ""
 allowed-tools:
   - Bash(confluence *)
@@ -14,7 +14,7 @@ command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 Both reads and writes ship today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
 `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`,
-`attachment list`,
+`folder get`, `folder create`, `folder delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
 `user info`. Read commands are below; writes are under "Writing content". The
@@ -186,17 +186,39 @@ confluence page get 123456 --resolve-authors
 
 ### page children
 
-Direct children of a page (numeric id or page URL). Page with
-`--limit`/`--cursor`, or drain with `--all`. Rows carry `id`, `title`, `type`.
+Direct children of a page or a folder, every content type, each tagged with
+`type` (`page`, `folder`, `database`, ...). Takes a numeric id, a page URL, or a
+folder URL (`…/wiki/spaces/KEY/folder/123`); a bare id is tried as a page, then
+as a folder. Page with `--limit`/`--cursor`, or drain with `--all`. Rows carry
+`id`, `title`, `type`. Filter on `type` if you want pages only.
 
 ```bash
 confluence page children 123400
-confluence page children 123400 --all
+confluence page children 777000 --all
 ```
 
 ```jsonl
 {"id":"123456","title":"API Design","type":"page"}
+{"id":"777000","title":"Pillars","type":"folder"}
 {"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+### folder get
+
+Folders are their own content type: no body, and `page get <folder-id>` fails
+with `not_a_page` (the hint names this command). Takes folder ids or folder
+URLs. Rows echo `input` and carry `id`, `type:"folder"`, `title`, `space_id`,
+`status`, `version`, `author_id`, `created_at`, `modified_at`, `web_url`, and
+`parent_id`/`parent_type` when nested. To see what is inside a folder use
+`page children <folder-id>`.
+
+```bash
+confluence folder get 777000
+```
+
+```jsonl
+{"input":"777000","id":"777000","type":"folder","title":"Pillars","space_id":"98765","status":"current","parent_id":"123400","parent_type":"page","version":1,"author_id":"a1","created_at":"2026-09-28T20:14:30.759Z","created_at_iso":"2026-09-28T20:14:30Z","modified_at":"2026-09-28T20:14:30.759Z","modified_at_iso":"2026-09-28T20:14:30Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/folder/777000"}
+{"_meta":{"has_more":false,"error_count":0}}
 ```
 
 ### page descendants
@@ -424,7 +446,7 @@ pipes a new storage/markdown body replaces the whole body and can.
 
 ### Creating a page
 
-Storage body:
+`--parent` may be a page or a folder (id or URL). Storage body:
 
 ```bash
 printf '<p>Hello</p>' | confluence page create --space ENG --title "X" --body-format storage
@@ -545,8 +567,8 @@ other check. If the comment inspection itself fails, the write is refused
 ### Moving a page (same space or across spaces)
 
 `page move <page-ref> --parent <dest-ref> --if-version <n>` moves a page under
-a different parent, in the same space or in another space, preserving the page
-ID, history, comments, and attachments. Page IDs are stable across renames and
+a different parent (a page or a folder), in the same space or in another space,
+preserving the page ID, history, comments, and attachments. Page IDs are stable across renames and
 moves; titles are not, so cite pages by ID. This is the personal-draft to
 team-space publication step: create and edit the draft in your personal space,
 then move it under the team page.
@@ -555,10 +577,11 @@ then move it under the team page.
 `--if-version`. If the page is already under the destination, it returns
 `moved:false` with no write.
 
-A same-space move re-sends the exact ADF and bumps the version. A cross-space
-move uses the v1 move endpoint: the body is untouched and the version does NOT
-change (`version` equals `previous_version`), so `--if-version` is checked by the
-preflight read only. Neither path touches inline-comment anchors. Whether page
+A same-space move to a page re-sends the exact ADF and bumps the version. A
+cross-space move, or a move into a folder, uses the v1 move endpoint: the body
+is untouched and the version does NOT change (`version` equals
+`previous_version`), so `--if-version` is checked by the preflight read only.
+Rows carry `parent_type` (`page` or `folder`). Neither path touches inline-comment anchors. Whether page
 restrictions survive a cross-space move is unverified; check in Confluence if
 they matter. The row's `web_url` for a cross-space move is the pre-move URL;
 `page get` returns the new one.
@@ -569,11 +592,27 @@ the destination parent reflects it immediately; use that to confirm.
 
 ```bash
 confluence page move 123456 --parent 200000 --if-version "$version"
+confluence page move 123456 --parent 777000 --if-version "$version"   # into a folder
 ```
 
 ```jsonl
-{"id":"123456","title":"X","previous_space_id":"98765","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"id":"123456","title":"X","previous_space_id":"98765","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","parent_type":"page","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
 {"_meta":{"has_more":false}}
+```
+
+### Creating and deleting folders
+
+`folder create --space <key|url> --title <t> [--parent <id|url>]` creates a
+folder under a page or folder (omit `--parent` for the space root). No body.
+`folder delete <id|url>... --yes` trashes folders with the same `--yes` /
+`--dry-run` / `confirmation_required` contract as `page delete`. Empty a folder
+(move or delete its children) before deleting it; what the API does with a
+non-empty folder's children is unverified.
+
+```bash
+confluence folder create --space ENG --title Pillars --parent 123400
+confluence folder delete 777000 --dry-run
+confluence folder delete 777000 --yes
 ```
 
 ### Deleting a page
