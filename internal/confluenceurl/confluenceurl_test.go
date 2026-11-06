@@ -54,6 +54,16 @@ func TestParse(t *testing.T) {
 			want: Ref{Kind: KindPage, BaseURL: "https://confluence.example.com:8090", SpaceKey: "ENG", PageID: "12345"}},
 		{name: "page non-numeric id", raw: "https://acme.atlassian.net/wiki/spaces/ENG/pages/abc", matched: true, wantErr: true},
 
+		// Folder via /spaces/KEY/folder/ID.
+		{name: "folder", raw: "https://acme.atlassian.net/wiki/spaces/ENG/folder/777", matched: true,
+			want: Ref{Kind: KindFolder, BaseURL: "https://acme.atlassian.net", SpaceKey: "ENG", FolderID: "777"}},
+		{name: "folder without wiki", raw: "https://acme.atlassian.net/spaces/ENG/folder/777", matched: true,
+			want: Ref{Kind: KindFolder, BaseURL: "https://acme.atlassian.net", SpaceKey: "ENG", FolderID: "777"}},
+		{name: "folder trailing slash", raw: "https://acme.atlassian.net/wiki/spaces/ENG/folder/777/", matched: true,
+			want: Ref{Kind: KindFolder, BaseURL: "https://acme.atlassian.net", SpaceKey: "ENG", FolderID: "777"}},
+		{name: "folder non-numeric id", raw: "https://acme.atlassian.net/wiki/spaces/ENG/folder/abc", matched: true, wantErr: true},
+		{name: "folder missing id", raw: "https://acme.atlassian.net/wiki/spaces/ENG/folder", matched: true, wantErr: true},
+
 		// Page via viewpage.action.
 		{name: "viewpage with wiki", raw: "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=12345", matched: true,
 			want: Ref{Kind: KindPage, BaseURL: "https://acme.atlassian.net", PageID: "12345"}},
