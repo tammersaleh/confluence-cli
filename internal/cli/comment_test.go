@@ -598,3 +598,35 @@ func TestCommentAdd_InlineBadMatchIndex(t *testing.T) {
 		t.Errorf("got Err=%q Code=%d, want invalid_input/%d", oErr.Err, oErr.Code, output.ExitGeneral)
 	}
 }
+
+// The jq `_meta` artifact (trailing bare null) is refused as invalid_input
+// before any API call.
+func TestCommentAdd_TrailingNullBodyRefused(t *testing.T) {
+	clearCredEnv(t)
+	var gotRepr string
+	server := commentAddServer(t, &gotRepr)
+	defer server.Close()
+
+	t.Setenv("CONFLUENCE_SITE", server.URL)
+	t.Setenv("CONFLUENCE_EMAIL", "test@example.com")
+	t.Setenv("CONFLUENCE_API_TOKEN", "api-token")
+
+	var out, errBuf bytes.Buffer
+	c := &CLI{}
+	c.SetOutput(&out, &errBuf)
+	c.SetCredentialsPath(filepath.Join(t.TempDir(), "none.json"))
+	c.SetInput(strings.NewReader("<p>hello</p>\nnull\n"))
+
+	cmd := &CommentAddCmd{Page: "123", BodyFormat: "storage"}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "invalid_input" {
+		t.Fatalf("expected invalid_input, got %v", err)
+	}
+	if !strings.Contains(oErr.Hint, "jq -s '.[0].body'") {
+		t.Errorf("hint = %q, want jq -s recommendation", oErr.Hint)
+	}
+	if gotRepr != "" {
+		t.Errorf("a POST was sent (repr %q); expected none", gotRepr)
+	}
+}

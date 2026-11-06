@@ -2616,3 +2616,29 @@ func TestPageConvertToLive_MixedSiteRejected(t *testing.T) {
 		t.Errorf("no rows should be emitted on a site conflict, got %q", out.String())
 	}
 }
+
+// A body carrying the jq `_meta` artifact (trailing bare null) is refused as
+// invalid_input before any API call, with a hint naming the jq fix.
+func TestPageUpdate_TrailingNullBodyRefused(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedUpdate
+	server := pageUpdateServer(t, 5, "Old", "<p>current</p>", &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "<p>new body</p>\nnull\n")
+
+	cmd := &PageUpdateCmd{Ref: "123", IfVersion: 5, BodyFormat: "storage"}
+	err := cmd.Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) || oErr.Err != "invalid_input" {
+		t.Fatalf("expected invalid_input, got %v", err)
+	}
+	if !strings.Contains(oErr.Hint, "jq -s '.[0].body'") {
+		t.Errorf("hint = %q, want jq -s recommendation", oErr.Hint)
+	}
+	if cap.bodyVal != "" {
+		t.Errorf("a PUT was sent with body %q; expected none", cap.bodyVal)
+	}
+}

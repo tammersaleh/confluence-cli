@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -49,6 +50,9 @@ func Read(r io.Reader) (present bool, body string, err error) {
 func Prepare(format, raw string) (representation, value string, err error) {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "storage":
+		if err := checkTrailingJSONScalar(raw); err != nil {
+			return "", "", err
+		}
 		if err := validateStorageFragment(raw); err != nil {
 			return "", "", err
 		}
@@ -60,6 +64,9 @@ func Prepare(format, raw string) (representation, value string, err error) {
 		}
 		return "atlas_doc_format", compact, nil
 	case "markdown", "md":
+		if err := checkTrailingJSONScalar(raw); err != nil {
+			return "", "", err
+		}
 		xhtml, err := markdownToStorage(raw)
 		if err != nil {
 			return "", "", err
@@ -68,6 +75,36 @@ func Prepare(format, raw string) (representation, value string, err error) {
 	default:
 		return "", "", fmt.Errorf("unknown body format %q (use storage, adf, or markdown)", format)
 	}
+}
+
+// ErrTrailingJSONScalar is returned when a body ends with a bare JSON scalar
+// line (`null`, `true`, `false`) right after a `>`. That shape is the
+// signature of `page get | jq -r .body`: every command's output is JSONL with
+// a `_meta` trailer line, and jq -r prints `null` for the missing `.body` on
+// that trailer. Callers map it to a piping error with a jq hint.
+var ErrTrailingJSONScalar = errors.New("body ends with a bare JSON scalar line after the last tag; this is usually the `_meta` trailer leaking through `jq -r .body`")
+
+// checkTrailingJSONScalar detects the jq-trailer artifact described on
+// ErrTrailingJSONScalar. It is deliberately narrow: the last line (after
+// TrimSpace) must be exactly a JSON scalar keyword and the content before it
+// must end with `>`. A literal `<p>null</p>` ends with `>` and passes; prose
+// ending with the word null has no preceding `>` and passes.
+func checkTrailingJSONScalar(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	i := strings.LastIndex(trimmed, "\n")
+	if i < 0 {
+		return nil
+	}
+	last := strings.TrimSpace(trimmed[i+1:])
+	switch last {
+	case "null", "true", "false":
+	default:
+		return nil
+	}
+	if strings.HasSuffix(strings.TrimSpace(trimmed[:i]), ">") {
+		return ErrTrailingJSONScalar
+	}
+	return nil
 }
 
 // markdownToStorage renders Markdown into Confluence storage-format XHTML.

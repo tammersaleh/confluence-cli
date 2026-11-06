@@ -1,6 +1,7 @@
 package bodywrite
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -310,5 +311,70 @@ func TestPrepareMarkdownRawHTMLEscaped(t *testing.T) {
 	}
 	if strings.Contains(val, "<script>") {
 		t.Errorf("raw <script> passed through unescaped: %q", val)
+	}
+}
+
+// A `page get | jq -r .body` pipeline appends a bare `null` line (jq's -r on
+// the _meta trailer). The validator must refuse it rather than write it.
+func TestPrepareStorageTrailingJSONScalar(t *testing.T) {
+	for _, in := range []string{
+		"<p>x</p>\nnull\n",
+		"<ul><li>x</li></ul>\nnull",
+		"<p>x</p>\ntrue\n",
+		"<p>x</p>\nfalse\n",
+		"<p>x</p>\n  null  \n",
+	} {
+		_, _, err := Prepare("storage", in)
+		if err == nil {
+			t.Errorf("Prepare(storage, %q): expected error, got nil", in)
+			continue
+		}
+		if !errors.Is(err, ErrTrailingJSONScalar) {
+			t.Errorf("Prepare(storage, %q): err = %v, want ErrTrailingJSONScalar", in, err)
+		}
+	}
+}
+
+// The literal word null inside an element is legitimate content.
+func TestPrepareStorageLiteralNullInElement(t *testing.T) {
+	for _, in := range []string{
+		"<p>null</p>",
+		"<p>x</p>\n<p>null</p>\n",
+		"<p>returns null</p>",
+	} {
+		if _, _, err := Prepare("storage", in); err != nil {
+			t.Errorf("Prepare(storage, %q): unexpected error: %v", in, err)
+		}
+	}
+}
+
+func TestPrepareMarkdownTrailingJSONScalar(t *testing.T) {
+	for _, in := range []string{
+		"<p>x</p>\nnull\n",
+		"Some text ending in a tag <br>\nnull\n",
+	} {
+		_, _, err := Prepare("markdown", in)
+		if err == nil {
+			t.Errorf("Prepare(markdown, %q): expected error, got nil", in)
+			continue
+		}
+		if !errors.Is(err, ErrTrailingJSONScalar) {
+			t.Errorf("Prepare(markdown, %q): err = %v, want ErrTrailingJSONScalar", in, err)
+		}
+	}
+}
+
+func TestPrepareMarkdownLiteralNullLine(t *testing.T) {
+	// Prose ending in the word null is not the jq artifact (no `>` before it).
+	if _, _, err := Prepare("markdown", "The function returns\nnull\n"); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// ADF already rejects trailing garbage via json.Unmarshal; pin that.
+func TestPrepareADFTrailingJSONScalar(t *testing.T) {
+	_, _, err := Prepare("adf", `{"type":"doc","version":1,"content":[]}`+"\nnull\n")
+	if err == nil {
+		t.Fatal("expected error for ADF with trailing null line")
 	}
 }
