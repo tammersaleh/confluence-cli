@@ -932,17 +932,30 @@ type childrenResponse struct {
 		ID     string `json:"id"`
 		Title  string `json:"title"`
 		Status string `json:"status"`
+		Type   string `json:"type"`
 	} `json:"results"`
 	Links struct {
 		Next string `json:"next"`
 	} `json:"_links"`
 }
 
-// ListChildren returns exactly one API page of direct children of pageID. The
-// v2 children endpoint returns id/title/status/spaceId/childPosition but no
-// body and no reliable parentId, so ParentID is left empty (all results are
-// children of pageID anyway) and Type is always "page".
-func (c *client) ListChildren(ctx context.Context, pageID, cursor string, limit int) (pages []Page, nextCursor string, err error) {
+// ListDirectChildren returns exactly one API page of direct children of a page
+// or folder via /wiki/api/v2/{pages|folders}/{id}/direct-children. Unlike the
+// deprecated /pages/{id}/children endpoint (pages only, type null), this returns
+// every content type with type populated; Type is passed through verbatim so
+// callers can tell folders apart from pages. ParentID is left empty (all
+// results are children of id anyway). A 404 maps to ErrPageNotFound or
+// ErrFolderNotFound according to kind.
+func (c *client) ListDirectChildren(ctx context.Context, kind ContentKind, id, cursor string, limit int) (children []Page, nextCursor string, err error) {
+	var path string
+	switch kind {
+	case ContentPage:
+		path = fmt.Sprintf("/wiki/api/v2/pages/%s/direct-children", id)
+	case ContentFolder:
+		path = fmt.Sprintf("/wiki/api/v2/folders/%s/direct-children", id)
+	default:
+		return nil, "", fmt.Errorf("unsupported content kind %q", kind)
+	}
 	if limit <= 0 {
 		limit = 25
 	}
@@ -952,10 +965,12 @@ func (c *client) ListChildren(ctx context.Context, pageID, cursor string, limit 
 		query.Set("cursor", cursor)
 	}
 
-	path := fmt.Sprintf("/wiki/api/v2/pages/%s/children", pageID)
 	resp, err := c.doRequest(ctx, http.MethodGet, path, query)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
+			if kind == ContentFolder {
+				return nil, "", folderNotFound(err)
+			}
 			return nil, "", ErrPageNotFound
 		}
 		return nil, "", err
@@ -967,20 +982,20 @@ func (c *client) ListChildren(ctx context.Context, pageID, cursor string, limit 
 		return nil, "", fmt.Errorf("decoding response: %w", err)
 	}
 
-	pages = make([]Page, 0, len(result.Results))
+	children = make([]Page, 0, len(result.Results))
 	for _, p := range result.Results {
-		pages = append(pages, Page{
+		children = append(children, Page{
 			ID:    p.ID,
 			Title: p.Title,
-			Type:  "page",
+			Type:  p.Type,
 		})
 	}
 
 	next, nerr := resolveNextCursor(resp.Header.Get("Link"), result.Links.Next)
 	if nerr != nil {
-		return pages, "", nerr
+		return children, "", nerr
 	}
-	return pages, next, nil
+	return children, next, nil
 }
 
 type descendantsResponse struct {
@@ -1058,17 +1073,24 @@ type ancestorsResponse struct {
 // often no title), so only ID and Type are populated. Ancestor chains are
 // short but pagination is followed if present.
 func (c *client) GetAncestors(ctx context.Context, pageID string) ([]Page, error) {
+	return c.getAncestors(ctx, fmt.Sprintf("/wiki/api/v2/pages/%s/ancestors", pageID), func(err error) error {
+		if errors.Is(err, ErrNotFound) {
+			return ErrPageNotFound
+		}
+		return err
+	})
+}
+
+// getAncestors drains a v2 ancestors endpoint. notFound maps a transport error
+// to the resource-specific not-found sentinel.
+func (c *client) getAncestors(ctx context.Context, path string, notFound func(error) error) ([]Page, error) {
 	var ancestors []Page
-	path := fmt.Sprintf("/wiki/api/v2/pages/%s/ancestors", pageID)
 	query := url.Values{}
 
 	for {
 		resp, err := c.doRequest(ctx, http.MethodGet, path, query)
 		if err != nil {
-			if errors.Is(err, ErrNotFound) {
-				return nil, ErrPageNotFound
-			}
-			return nil, err
+			return nil, notFound(err)
 		}
 
 		var result ancestorsResponse

@@ -10,6 +10,7 @@ import (
 var (
 	ErrSpaceNotFound      = errors.New("space not found")
 	ErrPageNotFound       = errors.New("page not found")       // used by GetPage in a later commit
+	ErrFolderNotFound     = errors.New("folder not found")     // 404 from /folders/{id} lookups
 	ErrAttachmentNotFound = errors.New("attachment not found") // 404 from attachment-by-id lookups
 	ErrNotFound           = errors.New("not found")            // generic 404 from doRequest
 	ErrUserNotFound       = errors.New("user not found")       // 404 from user-by-id lookups
@@ -70,8 +71,42 @@ type Page struct {
 	Type       string // "page", "database", "folder"
 }
 
+// ContentKind names a v2 content type that can act as a container in the page
+// hierarchy. Pages and folders have their own v2 resources (/pages, /folders),
+// so callers must know which one an id refers to.
+type ContentKind string
+
+const (
+	ContentPage   ContentKind = "page"
+	ContentFolder ContentKind = "folder"
+)
+
+// Folder is a v2 folder (GET /wiki/api/v2/folders/{id}). Folders have no body.
+// CreatedAt is normalized to ISO 8601 (the API returns epoch milliseconds).
+type Folder struct {
+	ID         string
+	Title      string
+	SpaceID    string
+	Status     string
+	ParentID   string // "" for a space root
+	ParentType string // "page", "folder", or "" when there is no parent
+	Version    int
+	AuthorID   string
+	CreatedAt  string // ISO 8601
+	ModifiedAt string // ISO 8601 (version.createdAt)
+	WebURL     string
+}
+
+// CreateFolderParams are the inputs to CreateFolder. ParentID may be a page or
+// a folder id; empty creates the folder at the space root.
+type CreateFolderParams struct {
+	SpaceID  string
+	Title    string
+	ParentID string
+}
+
 // Descendant is one node under a page in the descendants crawl. Unlike
-// ListChildren (direct children only), the descendants endpoint returns every
+// ListDirectChildren (direct children only), the descendants endpoint returns every
 // level below the page and carries depth (1 for direct children) and parentId.
 type Descendant struct {
 	ID       string
@@ -252,9 +287,16 @@ type Client interface {
 	ListSpaces(ctx context.Context, cursor string, limit int) (spaces []Space, nextCursor string, err error)
 	GetPages(ctx context.Context, spaceID string) ([]Page, error)
 	ListPages(ctx context.Context, spaceID, cursor string, limit int) (pages []Page, nextCursor string, err error)
-	ListChildren(ctx context.Context, pageID, cursor string, limit int) (pages []Page, nextCursor string, err error)
+	// ListDirectChildren returns one API page of the direct children of a page
+	// or folder (every content type: pages, folders, databases, whiteboards,
+	// embeds), each tagged with its Type verbatim from the API.
+	ListDirectChildren(ctx context.Context, kind ContentKind, id, cursor string, limit int) (children []Page, nextCursor string, err error)
 	GetDescendants(ctx context.Context, pageID, cursor string, limit int) (descendants []Descendant, nextCursor string, err error)
 	GetAncestors(ctx context.Context, pageID string) ([]Page, error)
+	GetFolder(ctx context.Context, folderID string) (*Folder, error)
+	GetFolderAncestors(ctx context.Context, folderID string) ([]Page, error)
+	CreateFolder(ctx context.Context, p CreateFolderParams) (*Folder, error)
+	DeleteFolder(ctx context.Context, folderID string) error
 	GetPageContent(ctx context.Context, pageID string) (*PageContent, error)
 	GetPage(ctx context.Context, pageID string, format APIBodyFormat) (*PageDetail, error)
 	GetAttachments(ctx context.Context, pageID string) ([]Attachment, error)

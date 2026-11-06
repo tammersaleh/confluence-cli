@@ -261,6 +261,11 @@ func pageGetServer(t *testing.T, notFound map[string]bool) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const prefix = "/wiki/api/v2/pages/"
+		// A missing bare id is probed as a folder; this server has none.
+		if strings.HasPrefix(r.URL.Path, "/wiki/api/v2/folders/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, prefix) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -937,7 +942,13 @@ func pageChildrenServer(t *testing.T, notFound map[string]bool) *httptest.Server
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const prefix = "/wiki/api/v2/pages/"
-		const suffix = "/children"
+		const suffix = "/direct-children"
+		// A bare id that is not a page is probed as a folder; this server has
+		// no folders, so that probe 404s too.
+		if strings.HasPrefix(r.URL.Path, "/wiki/api/v2/folders/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, prefix) || !strings.HasSuffix(r.URL.Path, suffix) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -949,11 +960,11 @@ func pageChildrenServer(t *testing.T, notFound map[string]bool) *httptest.Server
 			return
 		}
 		if r.URL.Query().Get("cursor") == "C2" {
-			_, _ = w.Write([]byte(`{"results":[{"id":"11","title":"Child B","status":"current"}],"_links":{"next":""}}`))
+			_, _ = w.Write([]byte(`{"results":[{"id":"11","title":"Child B","status":"current","type":"folder"}],"_links":{"next":""}}`))
 			return
 		}
 		next := srv.URL + prefix + id + suffix + "?cursor=C2"
-		_, _ = w.Write([]byte(`{"results":[{"id":"10","title":"Child A","status":"current"}],"_links":{"next":"` + next + `"}}`))
+		_, _ = w.Write([]byte(`{"results":[{"id":"10","title":"Child A","status":"current","type":"page"}],"_links":{"next":"` + next + `"}}`))
 	}))
 	return srv
 }

@@ -35,6 +35,7 @@ type CLI struct {
 	Version    VersionCmd    `cmd:"" help:"Show version."`
 	Space      SpaceCmd      `cmd:"" help:"Confluence spaces."`
 	Page       PageCmd       `cmd:"" aliases:"pages" help:"Read pages."`
+	Folder     FolderCmd     `cmd:"" aliases:"folders" help:"Read and write folders."`
 	Attachment AttachmentCmd `cmd:"" aliases:"attachments" help:"Page attachments."`
 	Search     SearchCmd     `cmd:"" help:"Search with CQL."`
 	Comment    CommentCmd    `cmd:"" aliases:"comments" help:"Read page comments."`
@@ -212,6 +213,13 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Err:    "page_not_found",
 			Detail: err.Error(),
 			Hint:   "Check the page ID/URL. Fetch a page with 'confluence page get <id|url>', or list a space's pages with 'confluence page list --space <key>'.",
+			Code:   output.ExitGeneral,
+		}
+	case errors.Is(err, confluence.ErrFolderNotFound):
+		oErr = &output.Error{
+			Err:    "folder_not_found",
+			Detail: err.Error(),
+			Hint:   "Check the folder ID/URL. Fetch a folder with 'confluence folder get <id|url>', or list a page's children with 'confluence page children <id|url>'.",
 			Code:   output.ExitGeneral,
 		}
 	case errors.Is(err, confluence.ErrSpaceNotFound):
