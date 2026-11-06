@@ -2034,3 +2034,167 @@ func (c *client) UploadAttachment(ctx context.Context, pageID, filePath string) 
 		DownloadURL: r.Links.Download,
 	}, nil
 }
+
+// restrictionsPath is the v1 content-restriction endpoint. Restrictions have
+// no v2 equivalent that exposes group names or display names: v2 splits them
+// into a latent /permissions list plus a /restriction-state flag, identifies
+// groups only by id, and returns no names. v1 is the single-resource model.
+func restrictionsPath(pageID string) string {
+	return fmt.Sprintf("/wiki/rest/api/content/%s/restriction", pageID)
+}
+
+// restrictionPageLimit is the nested user/group page size requested on GET.
+// Confluence applies `start`/`limit` to every nested list at once.
+const restrictionPageLimit = 200
+
+// restrictionsResponse is the v1 response for GET/PUT/DELETE on the
+// restriction endpoint. Each nested list carries its own paging fields.
+type restrictionsResponse struct {
+	Results []struct {
+		Operation    string `json:"operation"`
+		Restrictions struct {
+			User  restrictionList[restrictionUserJSON]  `json:"user"`
+			Group restrictionList[restrictionGroupJSON] `json:"group"`
+		} `json:"restrictions"`
+	} `json:"results"`
+}
+
+type restrictionList[T any] struct {
+	Results []T `json:"results"`
+	Start   int `json:"start"`
+	Limit   int `json:"limit"`
+	Size    int `json:"size"`
+}
+
+// truncated reports whether this list may continue on the next page.
+func (l restrictionList[T]) truncated() bool {
+	return l.Limit > 0 && l.Size >= l.Limit
+}
+
+type restrictionUserJSON struct {
+	AccountID   string `json:"accountId"`
+	DisplayName string `json:"displayName"`
+	PublicName  string `json:"publicName"`
+}
+
+type restrictionGroupJSON struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// GetRestrictions fetches the page's direct restrictions, draining nested
+// user/group pagination. Both operations are always returned, read first,
+// with non-nil slices so callers can emit [] rather than null.
+func (c *client) GetRestrictions(ctx context.Context, pageID string) ([]OperationRestriction, error) {
+	byOp := map[string]*OperationRestriction{
+		RestrictionRead:   {Operation: RestrictionRead, Users: []RestrictionUser{}, Groups: []RestrictionGroup{}},
+		RestrictionUpdate: {Operation: RestrictionUpdate, Users: []RestrictionUser{}, Groups: []RestrictionGroup{}},
+	}
+
+	start := 0
+	for {
+		query := url.Values{}
+		query.Set("expand", "restrictions.user,restrictions.group")
+		query.Set("limit", fmt.Sprint(restrictionPageLimit))
+		query.Set("start", fmt.Sprint(start))
+
+		resp, err := c.doRequest(ctx, http.MethodGet, restrictionsPath(pageID), query)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil, ErrPageNotFound
+			}
+			return nil, err
+		}
+		var result restrictionsResponse
+		err = json.NewDecoder(resp.Body).Decode(&result)
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("decoding response: %w", err)
+		}
+
+		more := false
+		pageLimit := 0
+		for _, r := range result.Results {
+			op, ok := byOp[r.Operation]
+			if !ok {
+				continue
+			}
+			for _, u := range r.Restrictions.User.Results {
+				name := u.DisplayName
+				if name == "" {
+					name = u.PublicName
+				}
+				op.Users = append(op.Users, RestrictionUser{AccountID: u.AccountID, DisplayName: name})
+			}
+			for _, g := range r.Restrictions.Group.Results {
+				op.Groups = append(op.Groups, RestrictionGroup(g))
+			}
+			// Follow the server's effective limit, which may be smaller than
+			// the one requested.
+			if r.Restrictions.User.truncated() || r.Restrictions.Group.truncated() {
+				more = true
+			}
+			pageLimit = max(pageLimit, r.Restrictions.User.Limit, r.Restrictions.Group.Limit)
+		}
+		if !more || pageLimit == 0 {
+			break
+		}
+		start += pageLimit
+	}
+
+	return []OperationRestriction{*byOp[RestrictionRead], *byOp[RestrictionUpdate]}, nil
+}
+
+// selfLockoutMarker is the stable phrase in Confluence's 400 when a restriction
+// write would evict the caller. A changed message only loses the specialized
+// classification; the write is still rejected and surfaces as api_error.
+const selfLockoutMarker = "evicts current user"
+
+// SetRestrictions PUTs the given operations to the v1 endpoint. Lists are
+// always encoded as arrays (never null) so an empty list clears that list
+// rather than being treated as omitted-and-preserved.
+func (c *client) SetRestrictions(ctx context.Context, pageID string, ops []OperationRestriction) error {
+	type principalJSON map[string]string
+	payload := make([]map[string]any, 0, len(ops))
+	for _, op := range ops {
+		users := make([]principalJSON, 0, len(op.Users))
+		for _, u := range op.Users {
+			users = append(users, principalJSON{"type": "known", "accountId": u.AccountID})
+		}
+		groups := make([]principalJSON, 0, len(op.Groups))
+		for _, g := range op.Groups {
+			groups = append(groups, principalJSON{"type": "group", "name": g.Name})
+		}
+		payload = append(payload, map[string]any{
+			"operation":    op.Operation,
+			"restrictions": map[string]any{"user": users, "group": groups},
+		})
+	}
+
+	resp, err := c.doJSON(ctx, http.MethodPut, restrictionsPath(pageID), nil, payload)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrPageNotFound
+		}
+		var se *StatusError
+		if errors.As(err, &se) && se.StatusCode == http.StatusBadRequest && strings.Contains(se.Message, selfLockoutMarker) {
+			return fmt.Errorf("%w: %s", ErrSelfLockout, se.Message)
+		}
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
+// ClearRestrictions DELETEs every direct restriction on the page.
+func (c *client) ClearRestrictions(ctx context.Context, pageID string) error {
+	resp, err := c.doRequest(ctx, http.MethodDelete, restrictionsPath(pageID), nil)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ErrPageNotFound
+		}
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}

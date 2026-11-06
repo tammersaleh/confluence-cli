@@ -26,6 +26,10 @@ var (
 	// success=false, or an unrecognized response shape). Transport failures and
 	// non-2xx statuses keep their StatusError/sentinel classification.
 	ErrLiveConvertFailed = errors.New("live conversion failed")
+
+	// ErrSelfLockout is the server's refusal to apply restrictions that would
+	// remove the caller's own view or edit access.
+	ErrSelfLockout = errors.New("restrictions would lock you out")
 )
 
 // StatusError is a typed transport error returned by doRequest for non-2xx
@@ -277,4 +281,44 @@ type Client interface {
 	AddLabel(ctx context.Context, pageID, label string) (*Label, error)
 	RemoveLabel(ctx context.Context, pageID, label string) error
 	UploadAttachment(ctx context.Context, pageID, filePath string) (*Attachment, error)
+	// GetRestrictions returns the page's direct view/edit restrictions via the
+	// v1 restriction endpoint (no v2 equivalent exposes group names or display
+	// names). Always two entries, read then update, with non-nil slices.
+	GetRestrictions(ctx context.Context, pageID string) ([]OperationRestriction, error)
+	// SetRestrictions PUTs the given operations. The server replaces each listed
+	// operation's user and group lists and preserves operations not listed, so
+	// callers wanting a declarative result send both. Users need AccountID,
+	// groups need Name. A server-side self-lockout rejection is ErrSelfLockout.
+	SetRestrictions(ctx context.Context, pageID string, ops []OperationRestriction) error
+	// ClearRestrictions removes every direct restriction on the page.
+	ClearRestrictions(ctx context.Context, pageID string) error
+}
+
+// Restriction operations as named by the Confluence API.
+const (
+	RestrictionRead   = "read"   // who may view
+	RestrictionUpdate = "update" // who may edit
+)
+
+// RestrictionUser is a user principal on a restriction. DisplayName is only
+// populated on reads.
+type RestrictionUser struct {
+	AccountID   string
+	DisplayName string
+}
+
+// RestrictionGroup is a group principal on a restriction. ID is only populated
+// on reads; writes identify groups by Name.
+type RestrictionGroup struct {
+	ID   string
+	Name string
+}
+
+// OperationRestriction is the set of principals allowed to perform one
+// operation (read or update) on a page. Empty lists mean the operation is not
+// restricted.
+type OperationRestriction struct {
+	Operation string
+	Users     []RestrictionUser
+	Groups    []RestrictionGroup
 }

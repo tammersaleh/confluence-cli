@@ -28,6 +28,7 @@ type PageCmd struct {
 	Move          PageMoveCmd          `cmd:"" help:"Move a page under a new parent, in the same space or another space (optimistic concurrency)."`
 	Delete        PageDeleteCmd        `cmd:"" help:"Delete pages (moves to trash)."`
 	ConvertToLive PageConvertToLiveCmd `cmd:"" name:"convert-to-live" help:"Convert pages to live docs (undocumented endpoint; no supported undo)."`
+	Restrictions  PageRestrictionsCmd  `cmd:"" help:"Get, set, or clear a page's view/edit restrictions."`
 }
 
 // resolvePageRef derives the site hint and page id from a single ref, which is
@@ -671,6 +672,8 @@ type PageCreateCmd struct {
 	Parent     string `help:"Parent page ID or URL."`
 	BodyFormat string `help:"storage, adf, or markdown (required when piping a body)."`
 	Live       bool   `help:"Create a live doc (subtype=live) instead of a regular page."`
+	// RestrictToMe restricts view and edit to the caller right after creation.
+	RestrictToMe bool `name:"restrict-to-me" help:"Restrict view and edit to the authenticated user immediately after creating the page."`
 }
 
 func (c *PageCreateCmd) Run(cli *CLI) error {
@@ -717,6 +720,17 @@ func (c *PageCreateCmd) Run(cli *CLI) error {
 		return cli.ClassifyError(err)
 	}
 
+	// Resolve the caller BEFORE creating the page so a failed lookup cannot
+	// leave an unrestricted page behind.
+	var restrictions []confluence.OperationRestriction
+	if c.RestrictToMe {
+		me, err := client.GetCurrentUser(ctx)
+		if err != nil {
+			return cli.ClassifyError(err)
+		}
+		restrictions = onlyMeRestrictions(me.AccountID)
+	}
+
 	subtype := ""
 	if c.Live {
 		subtype = confluence.PageSubtypeLive
@@ -731,6 +745,17 @@ func (c *PageCreateCmd) Run(cli *CLI) error {
 	})
 	if err != nil {
 		return cli.ClassifyError(err)
+	}
+
+	if restrictions != nil {
+		if err := client.SetRestrictions(ctx, rec.ID, restrictions); err != nil {
+			// The page exists but is unrestricted: say where it is so the
+			// caller can restrict or trash it.
+			oErr := cli.ClassifyError(err)
+			oErr.Detail = "page created but restricting it failed: " + oErr.Detail
+			oErr.Data = map[string]any{"id": rec.ID, "web_url": rec.WebURL}
+			return oErr
+		}
 	}
 
 	p := cli.NewPrinter()
@@ -750,6 +775,9 @@ func (c *PageCreateCmd) Run(cli *CLI) error {
 	// "live" when Confluence confirmed it.
 	if rec.Subtype != "" {
 		row["subtype"] = rec.Subtype
+	}
+	if restrictions != nil {
+		row["restricted"] = true
 	}
 	if err := p.PrintItem(row); err != nil {
 		return err
