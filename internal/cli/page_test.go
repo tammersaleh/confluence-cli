@@ -2635,7 +2635,7 @@ func TestPageUpdate_TrailingNullBodyRefused(t *testing.T) {
 	if !errors.As(err, &oErr) || oErr.Err != "invalid_input" {
 		t.Fatalf("expected invalid_input, got %v", err)
 	}
-	if !strings.Contains(oErr.Hint, "jq -s '.[0].body'") {
+	if !strings.Contains(oErr.Hint, "jq -rs '.[0].body'") {
 		t.Errorf("hint = %q, want jq -s recommendation", oErr.Hint)
 	}
 	if cap.bodyVal != "" {

@@ -323,6 +323,10 @@ func TestPrepareStorageTrailingJSONScalar(t *testing.T) {
 		"<p>x</p>\ntrue\n",
 		"<p>x</p>\nfalse\n",
 		"<p>x</p>\n  null  \n",
+		"<p>x</p>\r\nnull\r\n",
+		// An empty-body page: jq -r prints an empty line, then null.
+		"\nnull\n",
+		"null",
 	} {
 		_, _, err := Prepare("storage", in)
 		if err == nil {
@@ -348,10 +352,15 @@ func TestPrepareStorageLiteralNullInElement(t *testing.T) {
 	}
 }
 
+// Markdown from `page get --body-format markdown | jq -r .body` ends in
+// prose, not a tag, so the markdown guard does not require a preceding `>`.
 func TestPrepareMarkdownTrailingJSONScalar(t *testing.T) {
 	for _, in := range []string{
 		"<p>x</p>\nnull\n",
 		"Some text ending in a tag <br>\nnull\n",
+		"# Title\n\nThe function returns a value.\nnull\n",
+		"- item\nnull",
+		"\nnull\n",
 	} {
 		_, _, err := Prepare("markdown", in)
 		if err == nil {
@@ -364,10 +373,16 @@ func TestPrepareMarkdownTrailingJSONScalar(t *testing.T) {
 	}
 }
 
-func TestPrepareMarkdownLiteralNullLine(t *testing.T) {
-	// Prose ending in the word null is not the jq artifact (no `>` before it).
-	if _, _, err := Prepare("markdown", "The function returns\nnull\n"); err != nil {
-		t.Errorf("unexpected error: %v", err)
+func TestPrepareMarkdownLiteralNull(t *testing.T) {
+	// The word null that is not alone on the final line is content.
+	for _, in := range []string{
+		"The function returns null\n",
+		"Returns `null`.",
+		"null is returned\n\nMore text.",
+	} {
+		if _, _, err := Prepare("markdown", in); err != nil {
+			t.Errorf("Prepare(markdown, %q): unexpected error: %v", in, err)
+		}
 	}
 }
 

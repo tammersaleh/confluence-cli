@@ -50,7 +50,7 @@ func Read(r io.Reader) (present bool, body string, err error) {
 func Prepare(format, raw string) (representation, value string, err error) {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "storage":
-		if err := checkTrailingJSONScalar(raw); err != nil {
+		if err := checkTrailingJSONScalar(raw, true); err != nil {
 			return "", "", err
 		}
 		if err := validateStorageFragment(raw); err != nil {
@@ -64,7 +64,7 @@ func Prepare(format, raw string) (representation, value string, err error) {
 		}
 		return "atlas_doc_format", compact, nil
 	case "markdown", "md":
-		if err := checkTrailingJSONScalar(raw); err != nil {
+		if err := checkTrailingJSONScalar(raw, false); err != nil {
 			return "", "", err
 		}
 		xhtml, err := markdownToStorage(raw)
@@ -77,34 +77,40 @@ func Prepare(format, raw string) (representation, value string, err error) {
 	}
 }
 
-// ErrTrailingJSONScalar is returned when a body ends with a bare JSON scalar
-// line (`null`, `true`, `false`) right after a `>`. That shape is the
-// signature of `page get | jq -r .body`: every command's output is JSONL with
-// a `_meta` trailer line, and jq -r prints `null` for the missing `.body` on
-// that trailer. Callers map it to a piping error with a jq hint.
-var ErrTrailingJSONScalar = errors.New("body ends with a bare JSON scalar line after the last tag; this is usually the `_meta` trailer leaking through `jq -r .body`")
+// ErrTrailingJSONScalar is returned when a body ends with a line that is a
+// bare JSON scalar (`null`, `true`, `false`). That shape is the signature of
+// `page get | jq -r .body`: every command's output is JSONL with a `_meta`
+// trailer line, and jq -r prints `null` for the missing `.body` on that
+// trailer. Callers map it to a piping error with a jq hint.
+var ErrTrailingJSONScalar = errors.New("body ends with a bare JSON scalar line; this is usually the `_meta` trailer leaking through `jq -r .body`")
 
 // checkTrailingJSONScalar detects the jq-trailer artifact described on
-// ErrTrailingJSONScalar. It is deliberately narrow: the last line (after
-// TrimSpace) must be exactly a JSON scalar keyword and the content before it
-// must end with `>`. A literal `<p>null</p>` ends with `>` and passes; prose
-// ending with the word null has no preceding `>` and passes.
-func checkTrailingJSONScalar(raw string) error {
+// ErrTrailingJSONScalar. The last line (after TrimSpace) must be exactly a
+// JSON scalar keyword. A body that is only that keyword (an empty-body page
+// piped through jq) is rejected too.
+//
+// For storage, the content before that line must also end with `>`: the
+// artifact always follows the fragment's last closing tag, and a literal
+// `<p>null</p>` is content, not an artifact. Markdown ends in prose rather
+// than a tag, so markdown skips the `>` requirement; a Markdown document
+// whose final line is exactly the word null cannot be written as markdown
+// (wrap it in backticks or end it with punctuation).
+func checkTrailingJSONScalar(raw string, requireTag bool) error {
 	trimmed := strings.TrimSpace(raw)
 	i := strings.LastIndex(trimmed, "\n")
-	if i < 0 {
-		return nil
-	}
 	last := strings.TrimSpace(trimmed[i+1:])
 	switch last {
 	case "null", "true", "false":
 	default:
 		return nil
 	}
-	if strings.HasSuffix(strings.TrimSpace(trimmed[:i]), ">") {
+	if i < 0 {
 		return ErrTrailingJSONScalar
 	}
-	return nil
+	if requireTag && !strings.HasSuffix(strings.TrimSpace(trimmed[:i]), ">") {
+		return nil
+	}
+	return ErrTrailingJSONScalar
 }
 
 // markdownToStorage renders Markdown into Confluence storage-format XHTML.

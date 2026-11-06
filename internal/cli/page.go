@@ -679,7 +679,7 @@ func pipingError(err error) error {
 	return &output.Error{
 		Err:    "invalid_input",
 		Detail: err.Error(),
-		Hint:   "Output is JSONL with a _meta trailer line. Extract one field with: confluence page get <id> | jq -s '.[0].body'  (or: | head -1 | jq -r .body)",
+		Hint:   "Output is JSONL with a _meta trailer line. Extract one field with: confluence page get <id> | jq -rs '.[0].body'  (or: | head -1 | jq -r .body)",
 		Code:   output.ExitGeneral,
 	}
 }
