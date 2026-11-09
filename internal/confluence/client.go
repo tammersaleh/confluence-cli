@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tammersaleh/confluence-cli/internal/confluenceurl"
 	"github.com/tammersaleh/confluence-cli/internal/httpx"
 )
 
@@ -364,6 +365,9 @@ type searchResponse struct {
 			Space struct {
 				Key string `json:"key"`
 			} `json:"space"`
+			Expandable struct {
+				Space string `json:"space"` // "/rest/api/space/<KEY>" when space is not expanded
+			} `json:"_expandable"`
 		} `json:"content"`
 		Excerpt string `json:"excerpt"`
 		URL     string `json:"url"`
@@ -376,6 +380,12 @@ type searchResponse struct {
 // Search runs a CQL query via the v1 search endpoint and returns one API page of
 // results. URLs are returned verbatim (they may be relative). Invalid CQL
 // typically returns a 400, surfaced as a *StatusError wrapping ErrAPIError.
+//
+// The request asks for expand=content.space: without it the API omits
+// content.space and the space key would be empty. Note that result URLs use
+// the space ALIAS (/spaces/FIELDENG/...), which can differ from the key
+// (CUSTEXP), so the key is taken from content.space.key, then from the
+// content._expandable.space path, and only as a last resort from the URL.
 func (c *client) Search(ctx context.Context, cql, cursor string, limit int) (results []SearchResult, nextCursor string, err error) {
 	if limit <= 0 {
 		limit = 25
@@ -383,6 +393,7 @@ func (c *client) Search(ctx context.Context, cql, cursor string, limit int) (res
 	query := url.Values{}
 	query.Set("cql", cql)
 	query.Set("limit", fmt.Sprintf("%d", limit))
+	query.Set("expand", "content.space")
 	if cursor != "" {
 		query.Set("cursor", cursor)
 	}
@@ -400,11 +411,18 @@ func (c *client) Search(ctx context.Context, cql, cursor string, limit int) (res
 
 	results = make([]SearchResult, 0, len(result.Results))
 	for _, r := range result.Results {
+		key := r.Content.Space.Key
+		if key == "" {
+			key = spaceKeyFromExpandable(r.Content.Expandable.Space)
+		}
+		if key == "" {
+			key = c.spaceKeyFromURL(r.URL)
+		}
 		results = append(results, SearchResult{
 			ID:       r.Content.ID,
 			Title:    r.Content.Title,
 			Type:     r.Content.Type,
-			SpaceKey: r.Content.Space.Key,
+			SpaceKey: key,
 			Excerpt:  r.Excerpt,
 			URL:      r.URL,
 		})
@@ -415,6 +433,35 @@ func (c *client) Search(ctx context.Context, cql, cursor string, limit int) (res
 		return results, "", nerr
 	}
 	return results, next, nil
+}
+
+// spaceKeyFromExpandable extracts KEY from a "/rest/api/space/KEY" path, the
+// shape the v1 API puts in content._expandable.space when space is not
+// expanded. Returns "" for anything else.
+func spaceKeyFromExpandable(p string) string {
+	const prefix = "/rest/api/space/"
+	if !strings.HasPrefix(p, prefix) {
+		return ""
+	}
+	key := strings.TrimPrefix(p, prefix)
+	if i := strings.IndexAny(key, "/?#"); i >= 0 {
+		key = key[:i]
+	}
+	return key
+}
+
+// spaceKeyFromURL derives a space key from a search result URL (relative, like
+// "/spaces/KEY/pages/123/Title"). The segment is the space alias, which usually
+// but not always equals the key. Returns "" when the URL has no /spaces/ segment.
+func (c *client) spaceKeyFromURL(raw string) string {
+	if strings.HasPrefix(raw, "/") {
+		raw = c.baseURL + raw
+	}
+	ref, matched, err := confluenceurl.Parse(raw)
+	if !matched || err != nil {
+		return ""
+	}
+	return ref.SpaceKey
 }
 
 type commentsResponse struct {

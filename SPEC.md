@@ -522,7 +522,7 @@ CQL search. The positional argument is the CQL query. This is site-wide: the sit
 - `--cursor` - opaque cursor from a prior `_meta.next_cursor`, to fetch the next page.
 - `--all` - loop until the cursor is exhausted, emitting every result. The trailer omits `next_cursor` since nothing remains.
 
-Each row carries `id`, `title`, `type`, `space_key`, `excerpt`, and `url`.
+Each row carries `id`, `title`, `type`, `space_key`, `excerpt`, and `url`. `space_key` is the space's key (the value CQL `space = ...` and `--space` accept). `url` is returned verbatim and uses the space alias, which can differ from the key.
 
 ```jsonl
 $ confluence search 'type = page AND text ~ "runbook"'

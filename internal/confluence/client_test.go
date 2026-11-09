@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -1572,23 +1573,66 @@ func TestClient_TraceEmission(t *testing.T) {
 	}
 }
 
+// TestClient_Search uses a fixture shaped like a live v1 search response with
+// expand=content.space (sanitized). The space key (ENG) deliberately differs
+// from the alias (ENGINEERING) used in the result URL: the key must come from
+// content.space.key, not from the URL.
 func TestClient_Search(t *testing.T) {
-	var gotCQL, gotLimit string
+	var gotCQL, gotLimit, gotExpand string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/wiki/rest/api/search" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		gotCQL = r.URL.Query().Get("cql")
 		gotLimit = r.URL.Query().Get("limit")
+		gotExpand = r.URL.Query().Get("expand")
 		w.Write([]byte(`{
 			"results": [
 				{
-					"content": {"id": "123", "title": "My Page", "type": "page", "space": {"key": "ENG"}},
+					"content": {
+						"id": "123",
+						"type": "page",
+						"status": "current",
+						"title": "My Page",
+						"space": {
+							"id": 1001,
+							"key": "ENG",
+							"alias": "ENGINEERING",
+							"name": "Engineering",
+							"type": "knowledge_base",
+							"status": "current",
+							"_expandable": {"settings": "/rest/api/space/ENG/settings"},
+							"_links": {"webui": "/spaces/ENGINEERING", "self": "https://example.atlassian.net/wiki/rest/api/space/ENG"}
+						},
+						"macroRenderedOutput": {},
+						"extensions": {"position": 1},
+						"_expandable": {"container": "", "history": "/rest/api/content/123/history", "body": ""},
+						"_links": {"webui": "/spaces/ENGINEERING/pages/123/My+Page", "self": "https://example.atlassian.net/wiki/rest/api/content/123", "tinyui": "/x/abc"}
+					},
+					"title": "My Page",
 					"excerpt": "some excerpt",
-					"url": "/wiki/spaces/ENG/pages/123"
+					"url": "/spaces/ENGINEERING/pages/123/My+Page",
+					"resultGlobalContainer": {"title": "Engineering", "displayUrl": "/spaces/ENGINEERING"},
+					"breadcrumbs": [],
+					"entityType": "content",
+					"iconCssClass": "aui-iconfont-page-default",
+					"lastModified": "2026-01-02T03:04:05.000Z",
+					"friendlyLastModified": "Jan 02, 2026",
+					"score": 0.5
 				}
 			],
-			"_links": {"next": "/wiki/rest/api/search?cursor=NEXT"}
+			"start": 0,
+			"limit": 25,
+			"size": 1,
+			"totalSize": 2,
+			"cqlQuery": "type=page",
+			"searchDuration": 42,
+			"_links": {
+				"base": "https://example.atlassian.net/wiki",
+				"context": "/wiki",
+				"next": "/wiki/rest/api/search?cursor=NEXT",
+				"self": "https://example.atlassian.net/wiki/rest/api/search?expand=content.space&cql=type%3Dpage"
+			}
 		}`))
 	}))
 	defer server.Close()
@@ -1604,6 +1648,9 @@ func TestClient_Search(t *testing.T) {
 	if gotLimit != "25" {
 		t.Errorf("limit = %q, want 25 (default)", gotLimit)
 	}
+	if gotExpand != "content.space" {
+		t.Errorf("expand = %q, want content.space (without it the API omits content.space)", gotExpand)
+	}
 	if len(results) != 1 {
 		t.Fatalf("got %d results, want 1", len(results))
 	}
@@ -1612,16 +1659,79 @@ func TestClient_Search(t *testing.T) {
 		t.Errorf("result = %+v, want ID=123 Title=My Page Type=page", r)
 	}
 	if r.SpaceKey != "ENG" {
-		t.Errorf("SpaceKey = %q, want ENG", r.SpaceKey)
+		t.Errorf("SpaceKey = %q, want ENG (the key, not the URL alias)", r.SpaceKey)
 	}
 	if r.Excerpt != "some excerpt" {
 		t.Errorf("Excerpt = %q, want some excerpt", r.Excerpt)
 	}
-	if r.URL != "/wiki/spaces/ENG/pages/123" {
-		t.Errorf("URL = %q, want /wiki/spaces/ENG/pages/123 (verbatim)", r.URL)
+	if r.URL != "/spaces/ENGINEERING/pages/123/My+Page" {
+		t.Errorf("URL = %q, want /spaces/ENGINEERING/pages/123/My+Page (verbatim)", r.URL)
 	}
 	if nextCursor != "NEXT" {
 		t.Errorf("nextCursor = %q, want NEXT", nextCursor)
+	}
+}
+
+// TestClient_Search_SpaceKeyFallback covers results where the API omits
+// content.space (the un-expanded shape): the key falls back to the
+// content._expandable.space path, then to the /spaces/<KEY>/ segment of url.
+func TestClient_Search_SpaceKeyFallback(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string // the "content" object, minus space
+		url     string
+		want    string
+	}{
+		{
+			name:    "expandable space path",
+			content: `{"id": "1", "title": "A", "type": "page", "_expandable": {"space": "/rest/api/space/CUSTEXP", "history": "/rest/api/content/1/history"}}`,
+			url:     "/spaces/FIELDENG/pages/1/A",
+			want:    "CUSTEXP",
+		},
+		{
+			name:    "url page path",
+			content: `{"id": "2", "title": "B", "type": "page", "_expandable": {"history": "/rest/api/content/2/history"}}`,
+			url:     "/spaces/FESP/pages/2/B",
+			want:    "FESP",
+		},
+		{
+			name:    "url blog path",
+			content: `{"id": "3", "title": "C", "type": "blogpost"}`,
+			url:     "/spaces/~712020abc/blog/2026/02/25/3/C",
+			want:    "~712020abc",
+		},
+		{
+			name:    "url with wiki prefix",
+			content: `{"id": "4", "title": "D", "type": "page"}`,
+			url:     "/wiki/spaces/DOCS/pages/4/D",
+			want:    "DOCS",
+		},
+		{
+			name:    "nothing derivable",
+			content: `{"id": "5", "title": "E", "type": "page"}`,
+			url:     "/x/abc",
+			want:    "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintf(w, `{"results": [{"content": %s, "excerpt": "", "url": %q}], "_links": {}}`, tt.content, tt.url)
+			}))
+			defer server.Close()
+
+			c := NewClient(server.URL, "test@example.com", "api-token")
+			results, _, err := c.Search(context.Background(), "type=page", "", 0)
+			if err != nil {
+				t.Fatalf("Search() error: %v", err)
+			}
+			if len(results) != 1 {
+				t.Fatalf("got %d results, want 1", len(results))
+			}
+			if results[0].SpaceKey != tt.want {
+				t.Errorf("SpaceKey = %q, want %q", results[0].SpaceKey, tt.want)
+			}
+		})
 	}
 }
 
