@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -655,6 +656,9 @@ func resolveWriteBody(cli *CLI, bodyFormat string) (*confluence.WriteBody, error
 	}
 	repr, val, err := bodywrite.Prepare(bodyFormat, raw)
 	if err != nil {
+		if perr := pipingError(err); perr != nil {
+			return nil, perr
+		}
 		return nil, &output.Error{
 			Err:    "invalid_body",
 			Detail: err.Error(),
@@ -663,6 +667,21 @@ func resolveWriteBody(cli *CLI, bodyFormat string) (*confluence.WriteBody, error
 		}
 	}
 	return &confluence.WriteBody{Representation: confluence.APIBodyFormat(repr), Value: val}, nil
+}
+
+// pipingError maps bodywrite.ErrTrailingJSONScalar (the `_meta` trailer
+// leaking through `jq -r .body`) to an invalid_input error whose hint names
+// the fix. Returns nil for any other error.
+func pipingError(err error) error {
+	if !errors.Is(err, bodywrite.ErrTrailingJSONScalar) {
+		return nil
+	}
+	return &output.Error{
+		Err:    "invalid_input",
+		Detail: err.Error(),
+		Hint:   "Output is JSONL with a _meta trailer line. Extract one field with: confluence page get <id> | jq -rs '.[0].body'  (or: | head -1 | jq -r .body)",
+		Code:   output.ExitGeneral,
+	}
 }
 
 type PageCreateCmd struct {

@@ -217,6 +217,9 @@ func (c *CommentAddCmd) Run(cli *CLI) error {
 
 	repr, val, err := bodywrite.Prepare(c.BodyFormat, raw)
 	if err != nil {
+		if perr := pipingError(err); perr != nil {
+			return perr
+		}
 		return &output.Error{
 			Err:    "invalid_body",
 			Detail: err.Error(),
