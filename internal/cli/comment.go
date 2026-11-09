@@ -176,7 +176,7 @@ func (c *CommentListCmd) Run(cli *CLI) error {
 // --selection-text (with optional --match-index/--match-count).
 type CommentAddCmd struct {
 	Page          string `arg:"" name:"id-or-url" help:"Page ID or URL."`
-	BodyFormat    string `help:"storage, adf, or markdown (piped body)."`
+	BodyFormat    string `aliases:"format" help:"storage, adf, or markdown (piped body)."`
 	Inline        bool   `help:"Add an inline comment anchored to on-page text (requires --selection-text)."`
 	SelectionText string `name:"selection-text" help:"Text on the page to anchor an inline comment to (required with --inline)."`
 	MatchIndex    int    `name:"match-index" default:"0" help:"Which occurrence of the selection text (0-based)."`
