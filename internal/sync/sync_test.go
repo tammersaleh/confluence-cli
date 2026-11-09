@@ -78,8 +78,24 @@ func (m *mockClient) GetPage(ctx context.Context, pageID string, format confluen
 	return nil, nil
 }
 
-func (m *mockClient) ListChildren(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Page, string, error) {
+func (m *mockClient) ListDirectChildren(ctx context.Context, kind confluence.ContentKind, id, cursor string, limit int) ([]confluence.Page, string, error) {
 	return nil, "", nil
+}
+
+func (m *mockClient) GetFolder(ctx context.Context, folderID string) (*confluence.Folder, error) {
+	return nil, nil
+}
+
+func (m *mockClient) GetFolderAncestors(ctx context.Context, folderID string) ([]confluence.Page, error) {
+	return nil, nil
+}
+
+func (m *mockClient) CreateFolder(ctx context.Context, p confluence.CreateFolderParams) (*confluence.Folder, error) {
+	return nil, nil
+}
+
+func (m *mockClient) DeleteFolder(ctx context.Context, folderID string) error {
+	return nil
 }
 
 func (m *mockClient) GetDescendants(ctx context.Context, pageID, cursor string, limit int) ([]confluence.Descendant, string, error) {

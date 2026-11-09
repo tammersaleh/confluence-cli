@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
 
 ## Design principles
 
@@ -92,7 +92,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### Body input for writes
 
@@ -275,6 +275,8 @@ A `subtype` field appears only when the page is a live doc (value `live`); regul
 
 Each row carries `status` (`current`, `draft`, ...). `parent_id` and `parent_type` (`page`, `folder`, `database`) appear when the page has a parent; a space root omits both. Right after a move the parent fields can lag the write by a few minutes server-side; `page children` on the destination reflects the move first.
 
+`page get` reads pages only. A bare id that turns out to be a folder (its own v2 resource) fails inline with `not_a_page` and a hint pointing at `folder get`; a folder URL is rejected locally with `invalid_input`. A bare id that is neither stays `page_not_found`. The folder check costs one extra request and only runs after a page lookup 404s.
+
 Per-item errors (bad id, no permission) appear inline on stdout and bump `_meta.error_count`.
 
 Output is JSONL: a single-id fetch still emits two lines, the row and the `_meta` trailer. To extract one field for a pipeline, use `jq -rs '.[0].body'` or `head -1 | jq -r .body`; bare `jq -r .body` appends a `null` line from the trailer (see "Body input for writes").
@@ -300,19 +302,27 @@ $ confluence page get 123456 99999 --body-format markdown
 confluence page children <id|url> [--limit <n>] [--cursor <c>] [--all]
 ```
 
-List a page's direct children. The argument is a numeric page id or a page URL; a URL selects the site. One object per child, then the trailer.
+List the direct children of a page or a folder: every content type under it (pages, folders, databases, whiteboards, embeds), each tagged with its `type`. The argument is a numeric id, a page URL, or a folder URL (`…/wiki/spaces/KEY/folder/123`); a URL selects the site and fixes the kind. A bare id is looked up as a page first and, only if that returns `page_not_found`, as a folder (one extra request, paid once per invocation); an id that is neither is `page_not_found`. One object per child, then the trailer.
+
+This uses the v2 `direct-children` endpoint. The older `children` endpoint (pages only, no `type`) is deprecated and omitted folders entirely; filter on `type` if you want pages only. Cursors are endpoint-specific, so a `next_cursor` saved from a release before this change will not resume.
 
 - `--limit` - page size requested from the API (default 25).
 - `--cursor` - opaque cursor from a prior `_meta.next_cursor`, to fetch the next page.
 - `--all` - loop until the cursor is exhausted, emitting every child. The trailer omits `next_cursor` since nothing remains.
 
-Each row carries `id`, `title`, and `type`.
+Each row carries `id`, `title`, and `type` (`page`, `folder`, `database`, `whiteboard`, `embed`, as the API reports it).
 
 ```jsonl
 $ confluence page children 123400
 {"id":"123456","title":"API Design","type":"page"}
-{"id":"123457","title":"Database Schema","type":"page"}
+{"id":"777000","title":"Pillars","type":"folder"}
 {"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
+```
+
+```jsonl
+$ confluence page children 777000
+{"id":"123457","title":"Database Schema","type":"page"}
+{"_meta":{"has_more":false}}
 ```
 
 ### page descendants
@@ -377,7 +387,7 @@ $ confluence page tree --space ENG
 confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf|markdown] [--live] [< body]
 ```
 
-Create a page. `--space` takes a bare space key or a space/page URL; a URL selects the site. `--parent` nests the new page under an existing page (same site as the space). The body is read from stdin; `--body-format` is required only when a non-empty body is piped. With no stdin (or an empty/whitespace body), the page is created empty and `--body-format` may be omitted. `--live` creates a live doc (subtype `live`) instead of a regular page.
+Create a page. `--space` takes a bare space key or a space/page URL; a URL selects the site. `--parent` nests the new page under an existing page or folder, by id or URL (same site as the space); the API accepts either as the parent, and a parent URL selects the site when `--space` is a bare key. The body is read from stdin; `--body-format` is required only when a non-empty body is piped. With no stdin (or an empty/whitespace body), the page is created empty and `--body-format` may be omitted. `--live` creates a live doc (subtype `live`) instead of a regular page.
 
 The row carries `id`, `title`, `space_id`, `version`, `author_id`, `created_at`, and `web_url`; `parent_id` appears when the page has a parent, and `subtype` appears when the server returns one (for example `live`). The body is not echoed back.
 
@@ -423,19 +433,19 @@ A `page update` that pipes a NEW body destroys the anchors of open inline commen
 confluence page move <id|url> --parent <id|url> --if-version <n>
 ```
 
-Move a page under a different parent, in the same space or in another space, preserving the page ID, history, comments, and attachments. Both refs must resolve to one site. `--if-version` guards the source page's version as in `page update`.
+Move a page under a different parent, in the same space or in another space, preserving the page ID, history, comments, and attachments. The destination may be a page or a folder (bare id, page URL, or folder URL); a bare id is tried as a page first and as a folder only when the page lookup returns `page_not_found`. Both refs must resolve to one site. `--if-version` guards the source page's version as in `page update`.
 
 Self-parenting and a destination that is a descendant of the source (a cycle) are refused with `invalid_move`. If the page is already under the destination parent, the row carries `moved:false` and no write is issued.
 
 A same-space move is a v2 update that re-sends the page's exact ADF and changes only the parent. It bumps the version, and a concurrent edit fails at write time with `version_conflict`. It does not disturb inline-comment anchors and is not subject to the inline-comment guard.
 
-A cross-space move (destination parent in another space) uses the v1 move endpoint, the only public API that moves a published page between spaces (the v2 update endpoint refuses with "Only DRAFT pages can be moved between spaces"). It does not touch the body and does not bump the version, so `version` equals `previous_version` and `--if-version` is enforced only by the preflight read, not at write time. Attachments and comments move with the page. Whether page restrictions survive a cross-space move has not been verified; check them in Confluence afterwards if they matter. The page's URL changes to the destination space.
+A cross-space move (destination parent in another space) or a move into a folder (any space) uses the v1 move endpoint, the only public API for either (the v2 update endpoint refuses with "Only DRAFT pages can be moved between spaces" and only takes a page as `parentId`). It does not touch the body and does not bump the version, so `version` equals `previous_version` and `--if-version` is enforced only by the preflight read, not at write time. Attachments and comments move with the page. Whether page restrictions survive a cross-space move has not been verified; check them in Confluence afterwards if they matter. The page's URL changes to the destination space.
 
-The row carries `id`, `title`, `previous_space_id`, `space_id`, `previous_parent_id`, `parent_id`, `previous_version`, `version`, `moved`, and `web_url`. `web_url` is the pre-move URL for a cross-space move (the response does not include the new one); `page get` returns the current URL.
+The row carries `id`, `title`, `previous_space_id`, `space_id`, `previous_parent_id`, `parent_id`, `parent_type` (`page` or `folder`), `previous_version`, `version`, `moved`, and `web_url`. `web_url` is the pre-move URL for a cross-space move (the response does not include the new one); `page get` returns the current URL.
 
 ```jsonl
 $ confluence page move 123456 --parent 200000 --if-version 5
-{"id":"123456","title":"API Design","previous_space_id":"98765","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
+{"id":"123456","title":"API Design","previous_space_id":"98765","space_id":"98765","previous_parent_id":"100000","parent_id":"200000","parent_type":"page","previous_version":5,"version":6,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
 {"_meta":{"has_more":false}}
 ```
 
@@ -443,7 +453,15 @@ Cross-space (version unchanged):
 
 ```jsonl
 $ confluence page move 123456 --parent 300000 --if-version 5
-{"id":"123456","title":"API Design","previous_space_id":"98765","space_id":"55555","previous_parent_id":"100000","parent_id":"300000","previous_version":5,"version":5,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/~user/pages/123456"}
+{"id":"123456","title":"API Design","previous_space_id":"98765","space_id":"55555","previous_parent_id":"100000","parent_id":"300000","parent_type":"page","previous_version":5,"version":5,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/~user/pages/123456"}
+{"_meta":{"has_more":false}}
+```
+
+Into a folder (v1 move, version unchanged):
+
+```jsonl
+$ confluence page move 123456 --parent 777000 --if-version 5
+{"id":"123456","title":"API Design","previous_space_id":"98765","space_id":"98765","previous_parent_id":"100000","parent_id":"777000","parent_type":"folder","previous_version":5,"version":5,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/pages/123456"}
 {"_meta":{"has_more":false}}
 ```
 
@@ -489,6 +507,48 @@ warning: convert-to-live uses an undocumented Atlassian endpoint and has no supp
 ```
 
 (The warning line above is written to stderr, not stdout.)
+
+### folder get
+
+```text
+confluence folder get <id|url>...
+```
+
+Fetch one or more folders by numeric id or folder URL (`…/wiki/spaces/KEY/folder/123`). All arguments must resolve to one site. Each row echoes `input` and carries `id`, `type:"folder"`, `title`, `space_id`, `status`, `version`, `author_id`, `created_at`, `modified_at`, and `web_url`; `parent_id` and `parent_type` (`page` or `folder`) appear when the folder has a parent. Folders have no body. A trashed folder still resolves, with `status:"trashed"` and no parent. A page URL is rejected locally with `invalid_input`. Per-item errors (`folder_not_found`, no permission) appear inline and bump `_meta.error_count`.
+
+```jsonl
+$ confluence folder get 777000
+{"input":"777000","id":"777000","type":"folder","title":"Pillars","space_id":"98765","status":"current","parent_id":"123400","parent_type":"page","version":1,"author_id":"a1","created_at":"2026-09-28T20:14:30.759Z","created_at_iso":"2026-09-28T20:14:30Z","modified_at":"2026-09-28T20:14:30.759Z","modified_at_iso":"2026-09-28T20:14:30Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/folder/777000"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### folder create
+
+```text
+confluence folder create --space <key|url> --title <t> [--parent <id|url>]
+```
+
+Create a folder. `--space` takes a bare space key or a space/page URL; a URL selects the site. `--parent` nests the folder under an existing page or folder (same site as the space); omit it for the space root. No body. The row has the `folder get` shape without `input`.
+
+```jsonl
+$ confluence folder create --space ENG --title Pillars --parent 123400
+{"id":"777000","type":"folder","title":"Pillars","space_id":"98765","status":"current","parent_id":"123400","parent_type":"page","version":1,"author_id":"a1","created_at":"2026-09-28T20:14:30.759Z","created_at_iso":"2026-09-28T20:14:30Z","modified_at":"2026-09-28T20:14:30.759Z","modified_at_iso":"2026-09-28T20:14:30Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/folder/777000"}
+{"_meta":{"has_more":false}}
+```
+
+### folder delete
+
+```text
+confluence folder delete <id|url>... [--yes] [--dry-run]
+```
+
+Delete one or more folders. Delete moves folders to the trash; it is not a permanent purge. Same contract as `page delete`: a real delete requires `--yes`; without it (and without `--dry-run`) the command refuses with `confirmation_required` and deletes nothing. `--dry-run` previews. Rows echo `input`; deleted rows carry `id`, `deleted:true`, `delete_mode:"trash"`, dry-run rows carry `id`, `title`, `version`, `would_delete:true`, `delete_mode:"trash"`. Per-item failures appear inline and bump `_meta.error_count`. What happens to a folder's children on delete is not verified; empty the folder first.
+
+```jsonl
+$ confluence folder delete 777000 --yes
+{"input":"777000","id":"777000","deleted":true,"delete_mode":"trash"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
 
 ### attachment list
 

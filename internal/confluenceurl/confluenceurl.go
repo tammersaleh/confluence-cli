@@ -17,6 +17,7 @@ const (
 	KindSite Kind = iota
 	KindSpace
 	KindPage
+	KindFolder
 )
 
 func (k Kind) String() string {
@@ -27,6 +28,8 @@ func (k Kind) String() string {
 		return "space"
 	case KindPage:
 		return "page"
+	case KindFolder:
+		return "folder"
 	default:
 		return "unknown"
 	}
@@ -37,8 +40,9 @@ func (k Kind) String() string {
 type Ref struct {
 	Kind     Kind
 	BaseURL  string // canonical: scheme + lowercased host, no path (e.g. https://acme.atlassian.net)
-	SpaceKey string // set for KindSpace and for KindPage when derivable from the URL
+	SpaceKey string // set for KindSpace, KindPage, and KindFolder when derivable from the URL
 	PageID   string // set for KindPage
+	FolderID string // set for KindFolder
 }
 
 // Parse interprets raw as a Confluence URL.
@@ -90,9 +94,11 @@ func Parse(raw string) (ref Ref, matched bool, err error) {
 	}
 }
 
-// parseSpaces handles /spaces/KEY and /spaces/KEY/pages/ID[/Title].
+// parseSpaces handles /spaces/KEY, /spaces/KEY/pages/ID[/Title], and
+// /spaces/KEY/folder/ID.
 //
-// /spaces/KEY/pages/ID is a page. Any other trailing content after the space
+// /spaces/KEY/pages/ID is a page and /spaces/KEY/folder/ID is a folder (the
+// Cloud UI's folder URL uses the singular "folder"). Any other trailing content after the space
 // key (e.g. /overview, /blog/..., a single extra segment) is treated as a
 // space URL with the suffix ignored, matching the Cloud UI's space URLs.
 func parseSpaces(base string, segs []string) (Ref, bool, error) {
@@ -111,6 +117,18 @@ func parseSpaces(base string, segs []string) (Ref, bool, error) {
 			return Ref{}, true, fmt.Errorf("not a numeric page id: %q", id)
 		}
 		return Ref{Kind: KindPage, BaseURL: base, SpaceKey: spaceKey, PageID: id}, true, nil
+	}
+
+	// /spaces/KEY/folder/ID -> folder.
+	if len(segs) > 2 && segs[2] == "folder" {
+		if len(segs) < 4 {
+			return Ref{}, true, fmt.Errorf("folder URL missing folder id")
+		}
+		id := segs[3]
+		if !isDigits(id) {
+			return Ref{}, true, fmt.Errorf("not a numeric folder id: %q", id)
+		}
+		return Ref{Kind: KindFolder, BaseURL: base, SpaceKey: spaceKey, FolderID: id}, true, nil
 	}
 
 	// /spaces/KEY and anything else (/overview, /blog/..., etc.) -> space.

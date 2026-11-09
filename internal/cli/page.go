@@ -174,19 +174,19 @@ func (c *PageListCmd) resolveSpace(cli *CLI) (siteHint, spaceKey string, err err
 }
 
 type PageChildrenCmd struct {
-	Ref    string `arg:"" name:"id-or-url" help:"Page ID or URL."`
+	Ref    string `arg:"" name:"id-or-url" help:"Page or folder ID or URL."`
 	Limit  int    `default:"25" help:"Page size requested from the API."`
 	Cursor string `help:"Opaque pagination cursor from a prior _meta.next_cursor."`
 	All    bool   `help:"Fetch every page (loop until the cursor is exhausted)."`
 }
 
 func (c *PageChildrenCmd) Run(cli *CLI) error {
-	siteHint, pageID, err := resolvePageRef(cli, c.Ref)
+	ref, err := resolveContainerRef(cli, c.Ref)
 	if err != nil {
 		return err
 	}
 
-	client, _, err := cli.NewClientForSite(siteHint)
+	client, _, err := cli.NewClientForSite(ref.siteHint)
 	if err != nil {
 		return err
 	}
@@ -194,14 +194,37 @@ func (c *PageChildrenCmd) Run(cli *CLI) error {
 	ctx, cancel := cli.Context()
 	defer cancel()
 
+	// A typed URL fixes the kind. A bare id is probed as a page first and, only
+	// on page_not_found, as a folder; the discovered kind is kept for every
+	// later page of results so a folder listing pays the probe once.
+	kind := ref.kind
+	if kind == "" {
+		kind = confluence.ContentPage
+	}
+	probeFolder := ref.kind == ""
+
 	p := cli.NewPrinter()
 	cursor := c.Cursor
 	var next string
 	for {
-		children, n, err := client.ListChildren(ctx, pageID, cursor, c.Limit)
+		children, n, err := client.ListDirectChildren(ctx, kind, ref.id, cursor, c.Limit)
+		if err != nil && probeFolder && errors.Is(err, confluence.ErrPageNotFound) {
+			kind = confluence.ContentFolder
+			var ferr error
+			children, n, ferr = client.ListDirectChildren(ctx, kind, ref.id, cursor, c.Limit)
+			if ferr != nil {
+				if errors.Is(ferr, confluence.ErrFolderNotFound) {
+					// Neither a page nor a folder: report the original page error.
+					return cli.ClassifyError(err)
+				}
+				return cli.ClassifyError(ferr)
+			}
+			err = nil
+		}
 		if err != nil {
 			return cli.ClassifyError(err)
 		}
+		probeFolder = false
 		next = n
 
 		for _, pg := range children {
@@ -425,10 +448,12 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 		return err
 	}
 
-	// pair binds each caller input to the page id resolved from it.
+	// pair binds each caller input to the page id resolved from it. bare marks
+	// an untyped id, the only kind that might turn out to be a folder.
 	type pair struct {
 		input  string
 		pageID string
+		bare   bool
 	}
 	var pairs []pair
 	var urlRefs []confluenceurl.Ref
@@ -447,8 +472,17 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 		}
 		if !matched {
 			// Bare id: no site info.
-			pairs = append(pairs, pair{input: arg, pageID: arg})
+			pairs = append(pairs, pair{input: arg, pageID: arg, bare: true})
 			continue
+		}
+		if r.Kind == confluenceurl.KindFolder {
+			return &output.Error{
+				Err:    "invalid_input",
+				Detail: "URL identifies a folder, not a page",
+				Hint:   fmt.Sprintf("Use 'confluence folder get %s' for a folder; 'page get' reads pages only.", r.FolderID),
+				Input:  arg,
+				Code:   output.ExitGeneral,
+			}
 		}
 		if r.Kind != confluenceurl.KindPage || r.PageID == "" {
 			return &output.Error{
@@ -502,6 +536,24 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 		pd, err := client.GetPage(ctx, pr.pageID, format)
 		if err != nil {
 			oErr := cli.ClassifyError(err)
+			if pr.bare && errors.Is(err, confluence.ErrPageNotFound) {
+				// A bare id may be a folder, which has its own v2 resource. One
+				// probe tells the caller which command to use instead of a
+				// misleading page_not_found. A folder 404 keeps the page error;
+				// any other folder failure is the real answer.
+				switch _, ferr := client.GetFolder(ctx, pr.pageID); {
+				case ferr == nil:
+					oErr = &output.Error{
+						Err:    "not_a_page",
+						Detail: fmt.Sprintf("%s is a folder, not a page", pr.pageID),
+						Hint:   fmt.Sprintf("Use 'confluence folder get %s' to read the folder, or 'confluence page children %s' to list its contents.", pr.pageID, pr.pageID),
+						Code:   output.ExitGeneral,
+					}
+				case errors.Is(ferr, confluence.ErrFolderNotFound):
+				default:
+					oErr = cli.ClassifyError(ferr)
+				}
+			}
 			oErr.Input = pr.input
 			if err := p.PrintItem(oErr.AsItem()); err != nil {
 				return err
@@ -703,7 +755,7 @@ func pipingError(err error) error {
 type PageCreateCmd struct {
 	Space      string `required:"" help:"Space key or URL."`
 	Title      string `required:"" help:"Page title."`
-	Parent     string `help:"Parent page ID or URL."`
+	Parent     string `help:"Parent page or folder ID or URL."`
 	BodyFormat string `aliases:"format" help:"storage, adf, or markdown (required when piping a body)."`
 	Live       bool   `help:"Create a live doc (subtype=live) instead of a regular page."`
 }
@@ -714,29 +766,34 @@ func (c *PageCreateCmd) Run(cli *CLI) error {
 		return err
 	}
 
-	client, _, err := cli.NewClientForSite(siteHint)
-	if err != nil {
-		return err
-	}
-
-	// Resolve --parent to a bare page id. A parent URL must live on the same
-	// site as the space.
+	// Resolve --parent to a bare id. The parent may be a page or a folder (POST
+	// /pages accepts either as parentId; verified live). A parent URL must live
+	// on the same site as the space, and selects the site when --space is a
+	// bare key.
 	parentID := ""
 	if c.Parent != "" {
-		pSite, pID, perr := resolvePageRef(cli, c.Parent)
+		pr, perr := resolveContainerRef(cli, c.Parent)
 		if perr != nil {
 			return perr
 		}
-		if pSite != "" && siteHint != "" && pSite != siteHint {
+		if pr.siteHint != "" && siteHint != "" && pr.siteHint != siteHint {
 			return &output.Error{
 				Err:    "invalid_input",
 				Detail: "parent is on a different site than --space",
-				Hint:   "Pass a parent page on the same site as the space.",
+				Hint:   "Pass a parent on the same site as the space.",
 				Input:  c.Parent,
 				Code:   output.ExitGeneral,
 			}
 		}
-		parentID = pID
+		if siteHint == "" {
+			siteHint = pr.siteHint
+		}
+		parentID = pr.id
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
 	}
 
 	body, err := resolveWriteBody(cli, c.BodyFormat)
@@ -1029,8 +1086,44 @@ func commentFocusURL(cm confluence.Comment, pageURL string) string {
 
 type PageMoveCmd struct {
 	Ref       string `arg:"" name:"id-or-url" help:"Source page ID or URL."`
-	Parent    string `required:"" help:"Destination parent page ID or URL (same space or another space)."`
+	Parent    string `required:"" help:"Destination parent page or folder ID or URL (same space or another space)."`
 	IfVersion int    `name:"if-version" required:"" help:"Expected current version of the source page; the move is rejected if it differs."`
+}
+
+// moveDestination is the resolved --parent of a page move: a page or a folder,
+// with the fields the move needs from either.
+type moveDestination struct {
+	kind    confluence.ContentKind
+	spaceID string
+}
+
+// resolveMoveDestination fetches the destination to confirm it exists and learn
+// its space. A typed URL fixes the kind; a bare id is tried as a page first and
+// as a folder only when the page lookup reports page_not_found (any other
+// failure is returned as-is).
+func resolveMoveDestination(ctx context.Context, client confluence.Client, dst containerRef) (*moveDestination, error) {
+	if dst.kind != confluence.ContentFolder {
+		pg, err := client.GetPage(ctx, dst.id, confluence.BodyFormatStorage)
+		if err == nil {
+			return &moveDestination{kind: confluence.ContentPage, spaceID: pg.SpaceID}, nil
+		}
+		if dst.kind == confluence.ContentPage || !errors.Is(err, confluence.ErrPageNotFound) {
+			return nil, err
+		}
+		f, ferr := client.GetFolder(ctx, dst.id)
+		if ferr != nil {
+			if errors.Is(ferr, confluence.ErrFolderNotFound) {
+				return nil, err // neither: keep the page error
+			}
+			return nil, ferr
+		}
+		return &moveDestination{kind: confluence.ContentFolder, spaceID: f.SpaceID}, nil
+	}
+	f, err := client.GetFolder(ctx, dst.id)
+	if err != nil {
+		return nil, err
+	}
+	return &moveDestination{kind: confluence.ContentFolder, spaceID: f.SpaceID}, nil
 }
 
 func (c *PageMoveCmd) Run(cli *CLI) error {
@@ -1044,17 +1137,18 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 		}
 	}
 
-	// Resolve both refs symmetrically. resolvePageRef enforces --site matching for
-	// URL refs; here we also reject two URLs that point at different sites.
+	// Resolve both refs symmetrically. The source must be a page; the
+	// destination may be a page or a folder. Both resolvers enforce --site
+	// matching for URL refs; here we also reject two URLs on different sites.
 	srcSite, srcID, err := resolvePageRef(cli, c.Ref)
 	if err != nil {
 		return err
 	}
-	dstSite, dstID, err := resolvePageRef(cli, c.Parent)
+	dst, err := resolveContainerRef(cli, c.Parent)
 	if err != nil {
 		return err
 	}
-	if srcSite != "" && dstSite != "" && srcSite != dstSite {
+	if srcSite != "" && dst.siteHint != "" && srcSite != dst.siteHint {
 		return &output.Error{
 			Err:    "invalid_input",
 			Detail: "source and destination are on different sites",
@@ -1065,8 +1159,9 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 	}
 	siteHint := srcSite
 	if siteHint == "" {
-		siteHint = dstSite
+		siteHint = dst.siteHint
 	}
+	dstID := dst.id
 
 	// Self-parenting is invalid regardless of any remote state.
 	if dstID == srcID {
@@ -1101,12 +1196,12 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 			Code:   output.ExitGeneral,
 		}
 	}
-	// Fetch the destination parent to confirm it exists and learn its space.
-	dst, err := client.GetPage(ctx, dstID, confluence.BodyFormatStorage)
+	dest, err := resolveMoveDestination(ctx, client, dst)
 	if err != nil {
 		return cli.ClassifyError(err)
 	}
-	crossSpace := src.SpaceID != dst.SpaceID
+	toFolder := dest.kind == confluence.ContentFolder
+	crossSpace := src.SpaceID != dest.spaceID
 
 	p := cli.NewPrinter()
 
@@ -1119,6 +1214,7 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 			"previous_space_id": src.SpaceID,
 			"space_id":          src.SpaceID,
 			"parent_id":         dstID,
+			"parent_type":       string(dest.kind),
 			"previous_version":  c.IfVersion,
 			"version":           src.Version,
 			"moved":             false,
@@ -1132,7 +1228,12 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 
 	// Reject a cycle: the destination must not be a descendant of the source.
 	// Fail closed if ancestry cannot be inspected.
-	ancestors, err := client.GetAncestors(ctx, dstID)
+	var ancestors []confluence.Page
+	if toFolder {
+		ancestors, err = client.GetFolderAncestors(ctx, dstID)
+	} else {
+		ancestors, err = client.GetAncestors(ctx, dstID)
+	}
 	if err != nil {
 		return cli.ClassifyError(err)
 	}
@@ -1152,17 +1253,19 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 		"id":                 src.ID,
 		"title":              src.Title,
 		"previous_space_id":  src.SpaceID,
-		"space_id":           dst.SpaceID,
+		"space_id":           dest.spaceID,
 		"previous_parent_id": src.ParentID,
 		"parent_id":          dstID,
+		"parent_type":        string(dest.kind),
 		"previous_version":   c.IfVersion,
 		"moved":              true,
 	}
 
-	if crossSpace {
+	if crossSpace || toFolder {
 		// The v2 update endpoint refuses to change spaceId on a published page
-		// ("Only DRAFT pages can be moved between spaces"). The v1 move endpoint
-		// is the only public API for this. It leaves the body untouched (so
+		// ("Only DRAFT pages can be moved between spaces") and only accepts a
+		// page as parentId. The v1 move endpoint handles both a folder target
+		// and a cross-space move. It leaves the body untouched (so
 		// inline-comment anchors are safe) and does NOT bump the version, so
 		// --if-version is enforced only by the preflight above, not at write
 		// time. Attachments follow the page (verified live).

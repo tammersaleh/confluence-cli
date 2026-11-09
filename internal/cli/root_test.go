@@ -23,6 +23,13 @@ func TestClassifyError(t *testing.T) {
 		{name: "forbidden", err: confluence.ErrForbidden, wantErr: "forbidden", wantCode: output.ExitAuth},
 		{name: "space not found", err: confluence.ErrSpaceNotFound, wantErr: "space_not_found", wantCode: output.ExitGeneral},
 		{name: "page not found", err: confluence.ErrPageNotFound, wantErr: "page_not_found", wantCode: output.ExitGeneral},
+		{
+			name:         "folder not found keeps endpoint",
+			err:          &confluence.StatusError{StatusCode: 404, Endpoint: "/wiki/api/v2/folders/7", Err: confluence.ErrFolderNotFound},
+			wantErr:      "folder_not_found",
+			wantCode:     output.ExitGeneral,
+			wantEndpoint: "/wiki/api/v2/folders/7",
+		},
 		{name: "api error", err: confluence.ErrAPIError, wantErr: "api_error", wantCode: output.ExitGeneral},
 		{
 			name:     "wrapped space not found still maps",
