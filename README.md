@@ -7,7 +7,7 @@ commands are non-interactive and scriptable, built for LLM agents and CI.
 The read and write surface ships today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
 `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`,
-`folder get`, `folder create`, `folder delete`, `attachment list`,
+`page restrictions get|set|clear`, `folder get`, `folder create`, `folder delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
 `user info`. The full command surface is implemented. See `SPEC.md` for the full
@@ -294,7 +294,9 @@ Create a page. `--space` takes a bare key or a space/page URL; `--parent` nests
 the page under an existing page or folder on the same site. The body is read from stdin;
 `--body-format` is required only when a non-empty body is piped. With no stdin
 (or empty input), the page is created empty. `--live` creates a live doc
-(subtype `live`) instead of a regular page. The row carries `id`, `title`,
+(subtype `live`) instead of a regular page. `--restrict-to-me` restricts view
+and edit to the authenticated user right after creation (the row gains
+`restricted:true`). The row carries `id`, `title`,
 `space_id`, `version`, `author_id`, `created_at`, and `web_url`; `parent_id`
 appears when the page has a parent, and `subtype` appears when the server returns
 one. The body is not echoed.
@@ -302,6 +304,7 @@ one. The body is not echoed.
 ```bash
 printf '<p>Hello</p>' | confluence page create --space ENG --title "API Design" --body-format storage
 printf '<p>Hello</p>' | confluence page create --space ENG --title "Team Notes" --body-format storage --live
+printf '<p>Draft</p>' | confluence page create --space ENG --title "Private Draft" --body-format storage --restrict-to-me
 ```
 
 ```jsonl
@@ -400,6 +403,41 @@ confluence page convert-to-live 123456
 ```jsonl
 {"input":"123456","id":"123456","converted":true}
 {"_meta":{"has_more":false,"error_count":0}}
+```
+
+### page restrictions
+
+Get, set, or clear a page's direct view/edit restrictions (v1 restriction
+endpoint; inherited restrictions are not shown). `get` emits two rows, `read`
+then `update`, each with `users` (`account_id`, `display_name`) and `groups`
+(`id`, `name`); empty lists are `[]`.
+
+```bash
+confluence page restrictions get 123456
+```
+
+```jsonl
+{"page_id":"123456","operation":"read","users":[{"account_id":"a1","display_name":"Ada Lovelace"}],"groups":[]}
+{"page_id":"123456","operation":"update","users":[{"account_id":"a1","display_name":"Ada Lovelace"}],"groups":[]}
+{"_meta":{"has_more":false}}
+```
+
+`set` is declarative: both operations are always rewritten, so an operation
+with no flags is cleared. Users are account ids, groups are group names.
+`--only-me` restricts both view and edit to the authenticated user and cannot be
+combined with the other flags. No flags is `invalid_input`. The output is the
+final state, same rows as `get`. A write that would remove your own access is
+refused by Confluence and surfaces as `self_lockout`.
+
+```bash
+confluence page restrictions set 123456 --only-me
+confluence page restrictions set 123456 --read-group eng-leads --read-user a1 --update-user a1
+confluence page restrictions clear 123456
+```
+
+```jsonl
+{"page_id":"123456","cleared":true}
+{"_meta":{"has_more":false}}
 ```
 
 ### folder get

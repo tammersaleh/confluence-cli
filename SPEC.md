@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
 
 ## Design principles
 
@@ -92,7 +92,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### Body input for writes
 
@@ -384,12 +384,12 @@ $ confluence page tree --space ENG
 ### page create
 
 ```text
-confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf|markdown] [--live] [< body]
+confluence page create --space <key|url> --title <t> [--parent <id|url>] [--body-format storage|adf|markdown] [--live] [--restrict-to-me] [< body]
 ```
 
-Create a page. `--space` takes a bare space key or a space/page URL; a URL selects the site. `--parent` nests the new page under an existing page or folder, by id or URL (same site as the space); the API accepts either as the parent, and a parent URL selects the site when `--space` is a bare key. The body is read from stdin; `--body-format` is required only when a non-empty body is piped. With no stdin (or an empty/whitespace body), the page is created empty and `--body-format` may be omitted. `--live` creates a live doc (subtype `live`) instead of a regular page.
+Create a page. `--space` takes a bare space key or a space/page URL; a URL selects the site. `--parent` nests the new page under an existing page or folder, by id or URL (same site as the space); the API accepts either as the parent, and a parent URL selects the site when `--space` is a bare key. The body is read from stdin; `--body-format` is required only when a non-empty body is piped. With no stdin (or an empty/whitespace body), the page is created empty and `--body-format` may be omitted. `--live` creates a live doc (subtype `live`) instead of a regular page. `--restrict-to-me` restricts view and edit to the authenticated user immediately after creation (see `page restrictions set --only-me`); the caller is resolved before the page is created, so a failed lookup creates nothing. If the restriction write itself fails, the page exists unrestricted and the error's `data` carries its `id` and `web_url`.
 
-The row carries `id`, `title`, `space_id`, `version`, `author_id`, `created_at`, and `web_url`; `parent_id` appears when the page has a parent, and `subtype` appears when the server returns one (for example `live`). The body is not echoed back.
+The row carries `id`, `title`, `space_id`, `version`, `author_id`, `created_at`, and `web_url`; `parent_id` appears when the page has a parent, `subtype` appears when the server returns one (for example `live`), and `restricted:true` appears with `--restrict-to-me`. The body is not echoed back.
 
 ```jsonl
 $ printf '<p>Hello</p>' | confluence page create --space ENG --title "API Design" --body-format storage
@@ -507,6 +507,54 @@ warning: convert-to-live uses an undocumented Atlassian endpoint and has no supp
 ```
 
 (The warning line above is written to stderr, not stdout.)
+
+### page restrictions get
+
+```text
+confluence page restrictions get <page id|url>
+```
+
+Show a page's direct view/edit restrictions. Emits exactly two rows, `read` (who may view) then `update` (who may edit), each with `page_id`, `operation`, `users` (`account_id`, `display_name`) and `groups` (`id`, `name`). Empty lists mean the operation is unrestricted and are emitted as `[]`. Inherited restrictions from ancestors are not included. Nested user/group pagination is drained, so there is no cursor.
+
+Uses the v1 endpoint `/wiki/rest/api/content/{id}/restriction`. The v2 API splits restrictions into a latent `permissions` list plus a `restriction-state` flag, identifies groups by id only, and returns no display names, so v1 is used throughout.
+
+```jsonl
+$ confluence page restrictions get 123456
+{"page_id":"123456","operation":"read","users":[{"account_id":"a1","display_name":"Ada Lovelace"}],"groups":[{"id":"g-1","name":"eng-leads"}]}
+{"page_id":"123456","operation":"update","users":[{"account_id":"a1","display_name":"Ada Lovelace"}],"groups":[]}
+{"_meta":{"has_more":false}}
+```
+
+### page restrictions set
+
+```text
+confluence page restrictions set <page id|url> [--read-user <accountId>]... [--read-group <name>]... [--update-user <accountId>]... [--update-group <name>]... [--only-me]
+```
+
+Replace a page's restrictions with exactly the principals given. The command is declarative: both operations are always written, so an operation with no flags is cleared (for example `--update-user a1` alone makes the page editable only by `a1` and viewable by anyone with space access). Users are account ids, groups are group names. `--only-me` resolves the authenticated user and restricts both view and edit to that account; it cannot be combined with the other principal flags. No flags at all is `invalid_input` (use `page restrictions clear` to remove restrictions). Output is the final state, read back after the write, in the same two rows as `page restrictions get`.
+
+Confluence refuses a write that would remove the caller's own view or edit access (including when the caller is only covered by a group); this surfaces as `self_lockout`. Other server rejections (unknown account id, unknown group name) surface as `api_error` with the server message in `detail`.
+
+```jsonl
+$ confluence page restrictions set 123456 --only-me
+{"page_id":"123456","operation":"read","users":[{"account_id":"a1","display_name":"Ada Lovelace"}],"groups":[]}
+{"page_id":"123456","operation":"update","users":[{"account_id":"a1","display_name":"Ada Lovelace"}],"groups":[]}
+{"_meta":{"has_more":false}}
+```
+
+### page restrictions clear
+
+```text
+confluence page restrictions clear <page id|url>
+```
+
+Remove every direct restriction from a page. Emits `page_id` and `cleared:true`.
+
+```jsonl
+$ confluence page restrictions clear 123456
+{"page_id":"123456","cleared":true}
+{"_meta":{"has_more":false}}
+```
 
 ### folder get
 

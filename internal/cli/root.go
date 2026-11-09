@@ -268,6 +268,13 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Hint:   "Another edit landed first. Fetch the latest with 'confluence page get <id>' and retry with the new --if-version.",
 			Code:   output.ExitGeneral,
 		}
+	case errors.Is(err, confluence.ErrSelfLockout):
+		oErr = &output.Error{
+			Err:    "self_lockout",
+			Detail: err.Error(),
+			Hint:   "Confluence refused restrictions that would remove your own access. Include your account (see 'confluence user current') in the --read-user and --update-user lists, or use --only-me.",
+			Code:   output.ExitGeneral,
+		}
 	case errors.Is(err, confluence.ErrLiveConvertFailed):
 		oErr = &output.Error{
 			Err:    "live_convert_failed",

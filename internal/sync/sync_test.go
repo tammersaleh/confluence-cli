@@ -177,6 +177,18 @@ func (m *mockClient) UploadAttachment(ctx context.Context, pageID, filePath stri
 	return nil, nil
 }
 
+func (m *mockClient) GetRestrictions(ctx context.Context, pageID string) ([]confluence.OperationRestriction, error) {
+	return nil, nil
+}
+
+func (m *mockClient) SetRestrictions(ctx context.Context, pageID string, ops []confluence.OperationRestriction) error {
+	return nil
+}
+
+func (m *mockClient) ClearRestrictions(ctx context.Context, pageID string) error {
+	return nil
+}
+
 func TestSync_SingleLeafPage(t *testing.T) {
 	client := &mockClient{
 		space: &confluence.Space{ID: "123", Key: "TEST", Name: "Test Space"},

@@ -1525,7 +1525,14 @@ type capturedCreate struct {
 // pageCreateServer serves the space lookup and POST /pages, capturing the body.
 func pageCreateServer(t *testing.T, cap *capturedCreate) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(pageCreateHandler(t, cap, nil))
+}
+
+// pageCreateHandler is the handler behind pageCreateServer. Requests it does
+// not recognize go to fallback when non-nil, else fail the test.
+func pageCreateHandler(t *testing.T, cap *capturedCreate, fallback http.HandlerFunc) http.HandlerFunc {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/wiki/api/v2/spaces":
 			_, _ = w.Write([]byte(`{"results":[{"id":"12345","key":"ENG","name":"Engineering"}]}`))
@@ -1561,11 +1568,110 @@ func pageCreateServer(t *testing.T, cap *capturedCreate) *httptest.Server {
 				resp["subtype"] = cap.subtype
 			}
 			_ = json.NewEncoder(w).Encode(resp)
+		case fallback != nil:
+			fallback(w, r)
 		default:
 			t.Errorf("unexpected: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}
+	})
+}
+
+// restrictToMeServer composes the page-create handler with the restriction
+// handler (page id 999, matching pageCreateHandler's response) and records the
+// order of every request.
+func restrictToMeServer(t *testing.T, cap *capturedCreate, st *restrictionState) *httptest.Server {
+	t.Helper()
+	inner := restrictionHandler(t, st)
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/wiki/rest/api/content/999/restriction" {
+			r.URL.Path = "/wiki/rest/api/content/123/restriction"
+		}
+		pageCreateHandler(t, cap, func(w http.ResponseWriter, r *http.Request) {
+			inner(w, r)
+		})(w, r)
+		if r.URL.Path == "/wiki/api/v2/pages" {
+			st.calls = append(st.calls, "POST /wiki/api/v2/pages")
+		}
 	}))
+}
+
+func TestPageCreate_RestrictToMe(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedCreate
+	st := &restrictionState{}
+	server := restrictToMeServer(t, &cap, st)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	cmd := &PageCreateCmd{Space: "ENG", Title: "Private", RestrictToMe: true}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	// The caller is resolved before the page exists so a failed lookup cannot
+	// leave an unrestricted page behind.
+	if len(st.calls) < 3 || st.calls[0] != "GET /wiki/rest/api/user/current" || st.calls[1] != "POST /wiki/api/v2/pages" || st.calls[2] != "PUT /wiki/rest/api/content/123/restriction" {
+		t.Fatalf("call order = %v", st.calls)
+	}
+	if len(st.readUsers) != 1 || st.readUsers[0] != testMe || len(st.updateUsers) != 1 || st.updateUsers[0] != testMe {
+		t.Errorf("restrictions = read %v update %v, want only me on both", st.readUsers, st.updateUsers)
+	}
+	if len(st.readGroups) != 0 || len(st.updateGroups) != 0 {
+		t.Errorf("groups should be empty: %v %v", st.readGroups, st.updateGroups)
+	}
+
+	row := parseLines(t, out.String())[0]
+	if row["id"] != "999" || row["restricted"] != true {
+		t.Errorf("row = %v, want id 999 and restricted:true", row)
+	}
+}
+
+func TestPageCreate_NoRestrictOmitsRestricted(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedCreate
+	server := pageCreateServer(t, &cap)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	if err := (&PageCreateCmd{Space: "ENG", Title: "Open"}).Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	row := parseLines(t, out.String())[0]
+	if _, ok := row["restricted"]; ok {
+		t.Errorf("row should omit restricted without --restrict-to-me: %v", row)
+	}
+}
+
+func TestPageCreate_RestrictToMe_RestrictFails(t *testing.T) {
+	clearCredEnv(t)
+	var cap capturedCreate
+	st := &restrictionState{putStatus: http.StatusInternalServerError, putMessage: "boom"}
+	server := restrictToMeServer(t, &cap, st)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+
+	err := (&PageCreateCmd{Space: "ENG", Title: "Private", RestrictToMe: true}).Run(c)
+	var oErr *output.Error
+	if !errors.As(err, &oErr) {
+		t.Fatalf("expected *output.Error, got %T: %v", err, err)
+	}
+	// The page exists: the error must say where it is.
+	if oErr.Data["id"] != "999" || oErr.Data["web_url"] == "" || oErr.Data["web_url"] == nil {
+		t.Errorf("error data should carry the created page: %+v", oErr)
+	}
+	if out.Len() != 0 {
+		t.Errorf("no stdout row on failure: %q", out.String())
+	}
 }
 
 func TestPageCreate_StorageBody(t *testing.T) {
