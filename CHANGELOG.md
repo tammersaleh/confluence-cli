@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.4.0](https://github.com/tammersaleh/confluence-cli/compare/v2.3.1...v2.4.0) (2026-11-09)
+
+
+### Features
+
+* **cli:** accept --format as a hidden alias of --body-format ([75711d3](https://github.com/tammersaleh/confluence-cli/commit/75711d3d9bbecdaf242c3d4f05a3e25408b96744))
+* **folder:** folder get/create/delete, folder-aware page children/get/move ([7020c6b](https://github.com/tammersaleh/confluence-cli/commit/7020c6b2ceb5166aeb8c865a9e9981993e532162))
+* **page:** accept a folder URL as page create --parent ([40f959f](https://github.com/tammersaleh/confluence-cli/commit/40f959f6502a5a1087ac7836681118ae4d7b22c6))
+* **page:** add page restrictions get/set/clear and create --restrict-to-me ([97a4683](https://github.com/tammersaleh/confluence-cli/commit/97a4683859b43c9dab16c329206cbb1a461f7c87))
+* **url:** parse folder URLs (/spaces/KEY/folder/ID) as KindFolder ([2c432ec](https://github.com/tammersaleh/confluence-cli/commit/2c432ec50409845879638df8189e7ea4af1fab0e))
+
+
+### Bug Fixes
+
+* **bodywrite:** catch the jq artifact in markdown and single-line bodies, hint jq -rs ([3de183b](https://github.com/tammersaleh/confluence-cli/commit/3de183b7f13c521e5aaebf73f09f53489eba3c3d))
+* **bodywrite:** reject a trailing bare JSON scalar line in storage and markdown bodies ([2b0638b](https://github.com/tammersaleh/confluence-cli/commit/2b0638beb4e27ba54db99b2e78dfb08fdb7d23f8))
+* **converter:** escape angle brackets and backslashes in page-link targets ([326827e](https://github.com/tammersaleh/confluence-cli/commit/326827e4fb7ff1456c2b3ac6b2122cd5380ec8a3))
+* **converter:** first ri:* resource wins inside ac:link ([9523ece](https://github.com/tammersaleh/confluence-cli/commit/9523eced2a18b61f480c56cc0a7529596761afd9))
+* **converter:** stop truncating markdown after the first ac:link ([b4344f6](https://github.com/tammersaleh/confluence-cli/commit/b4344f67dad41521b74e3066aca8166b6586a656))
+* **converter:** valid CommonMark page-link targets, render status macro text ([904f7f6](https://github.com/tammersaleh/confluence-cli/commit/904f7f630c6eb0510eec7f00e7336d510c0c2d2b))
+* **page:** probe folders only for bare ids, surface folder errors, parent URL selects site ([5509e9a](https://github.com/tammersaleh/confluence-cli/commit/5509e9a338103f0805cec1d72f1bf962723df914))
+* **search:** populate space_key on search results ([4b5e489](https://github.com/tammersaleh/confluence-cli/commit/4b5e48992572cb2381d2b58a0aaeb7015a486bef))
+
 ## [2.3.1](https://github.com/tammersaleh/confluence-cli/compare/v2.3.0...v2.3.1) (2026-11-05)
 
 
