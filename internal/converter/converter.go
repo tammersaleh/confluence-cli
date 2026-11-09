@@ -1,7 +1,11 @@
+// Package converter turns Confluence storage format (XHTML) into GFM Markdown.
 package converter
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"io"
 	"path"
 	"regexp"
 	"strconv"
@@ -20,14 +24,27 @@ type Options struct {
 	AttachmentURL func(filename string) (url string, ok bool)
 }
 
-func Convert(storage string) string {
+// autoClose lists the HTML void elements the converter accepts in unclosed
+// form (<br>, not just <br/>). It deliberately replaces xml.HTMLAutoClose: that
+// list matches on local name, so its "link" entry auto-closed <ac:link> and
+// made the real </ac:link> a decoder error that truncated the output.
+var autoClose = []string{"br", "hr", "img"}
+
+var multiNewline = regexp.MustCompile(`\n{3,}`)
+var inlineWhitespace = regexp.MustCompile(`[\n\t]+`)
+var cellWhitespace = regexp.MustCompile(`\s*\n\s*`)
+
+// Convert renders a storage-format body as Markdown. It returns an error when
+// the body is not well-formed XML; the output is never silently truncated.
+func Convert(storage string) (string, error) {
 	return ConvertWithOptions(storage, Options{})
 }
 
-func ConvertWithOptions(storage string, opts Options) string {
+// ConvertWithOptions is Convert with attachment resolution options.
+func ConvertWithOptions(storage string, opts Options) (string, error) {
 	storage = strings.TrimSpace(storage)
 	if storage == "" {
-		return ""
+		return "", nil
 	}
 
 	// Wrap in root element for valid XML
@@ -35,27 +52,24 @@ func ConvertWithOptions(storage string, opts Options) string {
 
 	decoder := xml.NewDecoder(strings.NewReader(wrapped))
 	decoder.Strict = false
-	decoder.AutoClose = xml.HTMLAutoClose
+	decoder.AutoClose = autoClose
 	decoder.Entity = xml.HTMLEntity
 
 	var buf bytes.Buffer
-	c := &converter{
-		buf:            &buf,
-		opts:           opts,
-		listDepth:      0,
-		orderedCounter: make([]int, 10),
-	}
+	c := newConverter(&buf, opts)
 
-	c.parse(decoder)
+	if err := c.parse(decoder); err != nil {
+		return "", err
+	}
 
 	result := buf.String()
 	// Clean up multiple newlines
-	result = regexp.MustCompile(`\n{3,}`).ReplaceAllString(result, "\n\n")
+	result = multiNewline.ReplaceAllString(result, "\n\n")
 	result = strings.TrimRight(result, "\n")
 	if result != "" {
 		result += "\n"
 	}
-	return result
+	return result, nil
 }
 
 type converter struct {
@@ -68,25 +82,91 @@ type converter struct {
 	inBlockquote   bool
 	inTableHeader  bool
 	tableRowCells  []string
-	tableHeaders   []string
 }
 
-func (c *converter) parse(decoder *xml.Decoder) {
+func newConverter(buf *bytes.Buffer, opts Options) *converter {
+	return &converter{
+		buf:            buf,
+		opts:           opts,
+		orderedCounter: make([]int, 10),
+	}
+}
+
+// parse drives the decoder to EOF, dispatching every token.
+func (c *converter) parse(decoder *xml.Decoder) error {
 	for {
 		tok, err := decoder.Token()
-		if err != nil {
-			break
+		if errors.Is(err, io.EOF) {
+			return nil
 		}
+		if err != nil {
+			return wrapTokenErr(err)
+		}
+		if err := c.handleToken(tok, decoder); err != nil {
+			return err
+		}
+	}
+}
 
+// parseUntilEnd dispatches tokens until the end tag that closes the element
+// whose start tag was just consumed. Elements consumed whole by handleStart do
+// not affect the depth count since their end tags never reach this loop.
+func (c *converter) parseUntilEnd(decoder *xml.Decoder) error {
+	depth := 1
+	for {
+		tok, err := nextToken(decoder)
+		if err != nil {
+			return err
+		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			c.handleStart(t, decoder)
+			consumed, err := c.handleStart(t, decoder)
+			if err != nil {
+				return err
+			}
+			if !consumed {
+				depth++
+			}
 		case xml.EndElement:
+			depth--
+			if depth == 0 {
+				return nil
+			}
 			c.handleEnd(t)
 		case xml.CharData:
 			c.handleCharData(t)
 		}
 	}
+}
+
+func (c *converter) handleToken(tok xml.Token, decoder *xml.Decoder) error {
+	switch t := tok.(type) {
+	case xml.StartElement:
+		_, err := c.handleStart(t, decoder)
+		return err
+	case xml.EndElement:
+		c.handleEnd(t)
+	case xml.CharData:
+		c.handleCharData(t)
+	}
+	return nil
+}
+
+// nextToken reads a token inside an open element. EOF here means the element
+// was never closed, which is an error rather than a clean end.
+func nextToken(decoder *xml.Decoder) (xml.Token, error) {
+	tok, err := decoder.Token()
+	if errors.Is(err, io.EOF) {
+		return nil, wrapTokenErr(errors.New("unexpected EOF inside element"))
+	}
+	if err != nil {
+		return nil, wrapTokenErr(err)
+	}
+	return tok, nil
+}
+
+func wrapTokenErr(err error) error {
+	return fmt.Errorf("storage body is not well-formed XML: %w", err)
 }
 
 func xmlName(name xml.Name) string {
@@ -96,7 +176,9 @@ func xmlName(name xml.Name) string {
 	return name.Local
 }
 
-func (c *converter) handleStart(elem xml.StartElement, decoder *xml.Decoder) {
+// handleStart handles a start tag. consumed reports whether the handler read
+// through the element's matching end tag itself.
+func (c *converter) handleStart(elem xml.StartElement, decoder *xml.Decoder) (consumed bool, err error) {
 	name := xmlName(elem.Name)
 
 	switch name {
@@ -145,8 +227,7 @@ func (c *converter) handleStart(elem xml.StartElement, decoder *xml.Decoder) {
 	case "li":
 		c.writeListPrefix()
 	case "a":
-		c.handleLink(elem, decoder)
-		return
+		return true, c.handleLink(elem, decoder)
 	case "br":
 		c.buf.WriteString("\n")
 	case "hr":
@@ -159,26 +240,21 @@ func (c *converter) handleStart(elem xml.StartElement, decoder *xml.Decoder) {
 		c.tableRowCells = nil
 	case "th":
 		c.inTableHeader = true
-		c.collectTableCell(decoder, "th")
-		return
+		return true, c.collectTableCell(decoder)
 	case "td":
-		c.collectTableCell(decoder, "td")
-		return
+		return true, c.collectTableCell(decoder)
 	case "ac:structured-macro":
-		macroName := getAttr(elem.Attr, "ac:name")
-		if macroName == "code" {
-			c.handleCodeMacro(decoder)
-			return
-		}
+		return true, c.handleMacro(elem, decoder)
+	case "ac:link":
+		return true, c.handleACLink(decoder)
 	case "ac:image":
-		c.handleImage(decoder)
-		return
+		return true, c.handleImage(decoder)
 	case "ac:task-list":
 		// Task list container
 	case "ac:task":
-		c.handleTask(decoder)
-		return
+		return true, c.handleTask(decoder)
 	}
+	return false, nil
 }
 
 func (c *converter) handleEnd(elem xml.EndElement) {
@@ -213,8 +289,6 @@ func (c *converter) handleEnd(elem xml.EndElement) {
 		c.inBlockquote = false
 	case "tr":
 		c.writeTableRow()
-	case "table":
-		c.tableHeaders = nil
 	}
 }
 
@@ -224,7 +298,7 @@ func (c *converter) handleCharData(data xml.CharData) {
 	// Normalize whitespace but preserve meaningful spaces
 	if c.inParagraph || c.listDepth > 0 {
 		// Replace newlines and tabs with spaces, collapse multiple spaces
-		text = regexp.MustCompile(`[\n\t]+`).ReplaceAllString(text, " ")
+		text = inlineWhitespace.ReplaceAllString(text, " ")
 		if text != "" {
 			c.buf.WriteString(text)
 		}
@@ -233,143 +307,341 @@ func (c *converter) handleCharData(data xml.CharData) {
 	}
 }
 
-func (c *converter) handleLink(elem xml.StartElement, decoder *xml.Decoder) {
-	href := getAttr(elem.Attr, "href")
-	text := c.collectInlineText(decoder, "a")
-
-	// Rewrite attachment URLs
-	if isAttachmentURL(href) {
-		filename := path.Base(href)
-		if c.opts.AttachmentURL != nil {
-			if u, ok := c.opts.AttachmentURL(filename); ok {
-				href = u
-			} else {
-				href = filename
-			}
-		} else if c.opts.AttachmentPath != "" {
-			href = c.opts.AttachmentPath + "/" + filename
+// resolveAttachment maps an attachment filename to the href used in Markdown:
+// the AttachmentURL hook when set (bare filename when it reports !ok), else the
+// local AttachmentPath, else the bare filename.
+func (c *converter) resolveAttachment(filename string) string {
+	if c.opts.AttachmentURL != nil {
+		if u, ok := c.opts.AttachmentURL(filename); ok {
+			return u
 		}
+		return filename
+	}
+	if c.opts.AttachmentPath != "" {
+		return c.opts.AttachmentPath + "/" + filename
+	}
+	return filename
+}
+
+func (c *converter) handleLink(elem xml.StartElement, decoder *xml.Decoder) error {
+	href := getAttr(elem.Attr, "href")
+	text, err := c.collectInlineText(decoder)
+	if err != nil {
+		return err
+	}
+
+	if isAttachmentURL(href) {
+		href = c.resolveAttachment(path.Base(href))
 	}
 
 	c.buf.WriteString("[" + text + "](" + href + ")")
+	return nil
 }
 
-func (c *converter) handleImage(decoder *xml.Decoder) {
+// handleACLink renders <ac:link>: the label comes from ac:link-body or
+// ac:plain-text-link-body, the target from the ri:* resource child.
+//
+//	ri:page       -> [label](content-title), label defaults to the title
+//	ri:user       -> @<account-id> (no lookup)
+//	ri:attachment -> [label](resolved attachment href)
+//	ri:url        -> [label](value)
+//	none          -> label text
+func (c *converter) handleACLink(decoder *xml.Decoder) error {
+	var label, kind, target string
+	depth := 1
+
+	for {
+		tok, err := nextToken(decoder)
+		if err != nil {
+			return err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			name := xmlName(t.Name)
+			switch name {
+			case "ac:link-body", "ac:plain-text-link-body":
+				label, err = c.collectInlineText(decoder)
+				if err != nil {
+					return err
+				}
+				continue
+			case "ri:page", "ri:user", "ri:attachment", "ri:url":
+				// First resource wins: an attachment on another page nests the
+				// owning <ri:page> inside <ri:attachment>, and that page must
+				// not replace the attachment as the link target.
+				if kind == "" {
+					kind = name
+					switch name {
+					case "ri:page":
+						target = getAttr(t.Attr, "ri:content-title")
+					case "ri:user":
+						target = getAttr(t.Attr, "ri:account-id")
+					case "ri:attachment":
+						target = getAttr(t.Attr, "ri:filename")
+					case "ri:url":
+						target = getAttr(t.Attr, "ri:value")
+					}
+				}
+			}
+			depth++
+		case xml.EndElement:
+			depth--
+			if depth == 0 {
+				c.writeACLink(kind, strings.TrimSpace(label), target)
+				return nil
+			}
+		}
+	}
+}
+
+func (c *converter) writeACLink(kind, label, target string) {
+	switch kind {
+	case "ri:user":
+		if target == "" {
+			target = "unknown-user"
+		}
+		c.buf.WriteString("@" + target)
+	case "ri:attachment":
+		if label == "" {
+			label = target
+		}
+		c.buf.WriteString("[" + label + "](" + c.resolveAttachment(target) + ")")
+	case "ri:page":
+		if label == "" {
+			label = target
+		}
+		if label == "" {
+			return
+		}
+		c.buf.WriteString("[" + label + "](" + linkDestination(target) + ")")
+	case "ri:url":
+		if label == "" {
+			label = target
+		}
+		if label == "" {
+			return
+		}
+		c.buf.WriteString("[" + label + "](" + target + ")")
+	default:
+		c.buf.WriteString(label)
+	}
+}
+
+// destinationEscaper escapes the characters CommonMark forbids inside an
+// angle-bracketed link destination; line breaks and tabs become spaces.
+var destinationEscaper = strings.NewReplacer(
+	`\`, `\\`, "<", `\<`, ">", `\>`,
+	"\n", " ", "\r", " ", "\t", " ",
+)
+
+// linkDestination makes a page title a valid CommonMark link destination. A
+// plain title stays bare; one with whitespace, parentheses, angle brackets, or
+// a backslash is escaped and wrapped in angle brackets.
+func linkDestination(title string) string {
+	if strings.ContainsAny(title, " ()<>\\\n\r\t") {
+		return "<" + destinationEscaper.Replace(title) + ">"
+	}
+	return title
+}
+
+func (c *converter) handleImage(decoder *xml.Decoder) error {
 	var filename string
 	depth := 1
 
 	for {
-		tok, err := decoder.Token()
+		tok, err := nextToken(decoder)
 		if err != nil {
-			break
+			return err
 		}
 
 		switch t := tok.(type) {
 		case xml.StartElement:
 			depth++
-			name := xmlName(t.Name)
-			if name == "ri:attachment" {
+			if xmlName(t.Name) == "ri:attachment" {
 				filename = getAttr(t.Attr, "ri:filename")
 			}
 		case xml.EndElement:
 			depth--
-			name := xmlName(t.Name)
-			if name == "ac:image" || depth == 0 {
-				imgPath := filename
+			if depth == 0 {
 				if filename != "" {
-					if c.opts.AttachmentURL != nil {
-						if u, ok := c.opts.AttachmentURL(filename); ok {
-							imgPath = u
-						}
-					} else if c.opts.AttachmentPath != "" {
-						imgPath = c.opts.AttachmentPath + "/" + filename
+					c.buf.WriteString("![" + filename + "](" + c.resolveAttachment(filename) + ")\n")
+				}
+				return nil
+			}
+		}
+	}
+}
+
+// handleMacro renders <ac:structured-macro>. A macro with an ac:rich-text-body
+// has that body converted in place and its parameters dropped. A macro with an
+// ac:plain-text-body (the code macro and its relatives) becomes a fenced code
+// block, using the "language" parameter as the info string. The status macro
+// becomes `[status: <title>]`. Any other macro becomes a placeholder
+// `[macro: <name>]`, with the title of an ri:page found among its parameters
+// appended when present. No other parameter text is emitted as body text.
+func (c *converter) handleMacro(elem xml.StartElement, decoder *xml.Decoder) error {
+	name := getAttr(elem.Attr, "ac:name")
+	if name == "" {
+		name = "unknown"
+	}
+
+	var lang, code, pageTitle, statusTitle string
+	hasCode, hasRichBody := false, false
+	depth := 1
+
+	for {
+		tok, err := nextToken(decoder)
+		if err != nil {
+			return err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch xmlName(t.Name) {
+			case "ac:parameter":
+				text, title, err := c.collectParameter(decoder)
+				if err != nil {
+					return err
+				}
+				switch getAttr(t.Attr, "ac:name") {
+				case "language":
+					lang = strings.TrimSpace(text)
+				case "title":
+					// The status macro is the one allowlisted parameter: its
+					// title is the visible lozenge text.
+					if name == "status" {
+						statusTitle = strings.TrimSpace(text)
 					}
 				}
-				if filename != "" {
-					c.buf.WriteString("![" + filename + "](" + imgPath + ")\n")
+				if pageTitle == "" {
+					pageTitle = title
 				}
-				return
-			}
-		}
-	}
-}
-
-func (c *converter) handleCodeMacro(decoder *xml.Decoder) {
-	var lang string
-	var code string
-	depth := 1
-
-	for {
-		tok, err := decoder.Token()
-		if err != nil {
-			break
-		}
-
-		switch t := tok.(type) {
-		case xml.StartElement:
-			depth++
-			name := xmlName(t.Name)
-			if name == "ac:parameter" && getAttr(t.Attr, "ac:name") == "language" {
-				lang = c.collectInlineText(decoder, "ac:parameter")
-				depth--
-			} else if name == "ac:plain-text-body" {
-				code = c.collectCDATA(decoder)
-				depth--
+			case "ac:plain-text-body":
+				hasCode = true
+				code, err = c.collectInlineText(decoder)
+				if err != nil {
+					return err
+				}
+			case "ac:rich-text-body":
+				hasRichBody = true
+				if err := c.parseUntilEnd(decoder); err != nil {
+					return err
+				}
+			default:
+				depth++
 			}
 		case xml.EndElement:
 			depth--
-			name := xmlName(t.Name)
-			if name == "ac:structured-macro" || depth == 0 {
-				c.buf.WriteString("```" + lang + "\n")
-				c.buf.WriteString(strings.TrimSpace(code))
-				c.buf.WriteString("\n```\n")
-				return
+			if depth == 0 {
+				switch {
+				case hasRichBody:
+				case hasCode || name == "code":
+					c.buf.WriteString("```" + lang + "\n")
+					c.buf.WriteString(strings.TrimSpace(code))
+					c.buf.WriteString("\n```\n")
+				case statusTitle != "":
+					c.buf.WriteString("[status: " + statusTitle + "]")
+					if !c.inParagraph {
+						c.buf.WriteString("\n\n")
+					}
+				default:
+					c.buf.WriteString("[macro: " + name)
+					if pageTitle != "" {
+						c.buf.WriteString(" " + pageTitle)
+					}
+					c.buf.WriteString("]")
+					if !c.inParagraph {
+						c.buf.WriteString("\n\n")
+					}
+				}
+				return nil
 			}
 		}
 	}
 }
 
-func (c *converter) handleTask(decoder *xml.Decoder) {
-	var status string
-	var body string
+// collectParameter consumes an <ac:parameter> subtree, returning its character
+// data and the content-title of the first ri:page inside it.
+func (c *converter) collectParameter(decoder *xml.Decoder) (text, pageTitle string, err error) {
+	var sb strings.Builder
 	depth := 1
 
 	for {
-		tok, err := decoder.Token()
+		tok, err := nextToken(decoder)
 		if err != nil {
-			break
+			return "", "", err
 		}
 
 		switch t := tok.(type) {
 		case xml.StartElement:
 			depth++
-			name := xmlName(t.Name)
-			switch name {
+			if xmlName(t.Name) == "ri:page" && pageTitle == "" {
+				pageTitle = getAttr(t.Attr, "ri:content-title")
+			}
+		case xml.EndElement:
+			depth--
+			if depth == 0 {
+				return sb.String(), pageTitle, nil
+			}
+		case xml.CharData:
+			sb.Write(t)
+		}
+	}
+}
+
+func (c *converter) handleTask(decoder *xml.Decoder) error {
+	var status, body string
+	depth := 1
+
+	for {
+		tok, err := nextToken(decoder)
+		if err != nil {
+			return err
+		}
+
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch xmlName(t.Name) {
 			case "ac:task-status":
-				status = c.collectInlineText(decoder, "ac:task-status")
-				depth--
+				status, err = c.collectInlineText(decoder)
 			case "ac:task-body":
-				body = c.collectInlineText(decoder, "ac:task-body")
-				depth--
+				body, err = c.collectInlineText(decoder)
+			default:
+				depth++
+			}
+			if err != nil {
+				return err
 			}
 		case xml.EndElement:
 			depth--
-			name := xmlName(t.Name)
-			if name == "ac:task" || depth == 0 {
+			if depth == 0 {
 				checkbox := "[ ]"
 				if status == "complete" {
 					checkbox = "[x]"
 				}
 				c.buf.WriteString("- " + checkbox + " " + strings.TrimSpace(body) + "\n")
-				return
+				return nil
 			}
 		}
 	}
 }
 
-func (c *converter) collectTableCell(decoder *xml.Decoder, tagName string) {
-	text := c.collectInlineText(decoder, tagName)
-	c.tableRowCells = append(c.tableRowCells, strings.TrimSpace(text))
+// collectTableCell converts a <td>/<th> subtree with a nested converter so
+// inline formatting, links, and mentions survive, then flattens the result to
+// one line.
+func (c *converter) collectTableCell(decoder *xml.Decoder) error {
+	var cell bytes.Buffer
+	sub := newConverter(&cell, c.opts)
+	sub.inParagraph = true
+
+	if err := sub.parseUntilEnd(decoder); err != nil {
+		return err
+	}
+
+	text := cellWhitespace.ReplaceAllString(strings.TrimSpace(cell.String()), " ")
+	c.tableRowCells = append(c.tableRowCells, text)
+	return nil
 }
 
 func (c *converter) writeTableRow() {
@@ -387,7 +659,6 @@ func (c *converter) writeTableRow() {
 		}
 		c.buf.WriteString("| " + strings.Join(seps, " | ") + " |\n")
 		c.inTableHeader = false
-		c.tableHeaders = c.tableRowCells
 	}
 
 	c.tableRowCells = nil
@@ -408,14 +679,16 @@ func (c *converter) writeListPrefix() {
 	}
 }
 
-func (c *converter) collectInlineText(decoder *xml.Decoder, endTag string) string {
+// collectInlineText consumes the current element's subtree and returns its
+// character data (including CDATA), ignoring markup.
+func (c *converter) collectInlineText(decoder *xml.Decoder) (string, error) {
 	var text strings.Builder
 	depth := 1
 
 	for {
-		tok, err := decoder.Token()
+		tok, err := nextToken(decoder)
 		if err != nil {
-			break
+			return "", err
 		}
 
 		switch t := tok.(type) {
@@ -423,32 +696,13 @@ func (c *converter) collectInlineText(decoder *xml.Decoder, endTag string) strin
 			depth++
 		case xml.EndElement:
 			depth--
-			name := xmlName(t.Name)
-			if depth == 0 || name == endTag {
-				return text.String()
+			if depth == 0 {
+				return text.String(), nil
 			}
 		case xml.CharData:
 			text.Write(t)
 		}
 	}
-	return text.String()
-}
-
-func (c *converter) collectCDATA(decoder *xml.Decoder) string {
-	for {
-		tok, err := decoder.Token()
-		if err != nil {
-			break
-		}
-
-		switch t := tok.(type) {
-		case xml.CharData:
-			return string(t)
-		case xml.EndElement:
-			return ""
-		}
-	}
-	return ""
 }
 
 func getAttr(attrs []xml.Attr, name string) string {

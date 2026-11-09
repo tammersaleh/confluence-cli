@@ -112,9 +112,13 @@ confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs
 ```
 
 ```jsonl
-{"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":false}
+{"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":false,"conversion_errors":0}
 {"_meta":{"has_more":false}}
 ```
+
+A page whose body cannot be converted is logged to stderr and skipped (its
+existing file stays, its children still sync). `conversion_errors` counts those
+pages; when nonzero the trailer carries `error_count` and the command exits 1.
 
 Flags:
 
@@ -186,9 +190,11 @@ Fetch pages by numeric id or page URL; all arguments must be on one site. Each
 row echoes its `input`. `--body-format` (default `storage`) also accepts
 `atlas_doc_format` (alias `adf`), `view`, and `markdown` (alias `md`). ADF `body`
 is a nested JSON object; `markdown` is derived from storage with attachment
-references resolved to remote URLs and adds `source_body_format`.
-`--resolve-authors` adds an `author_name` sibling (best-effort, cached user
-lookups). A `subtype` field appears only for live docs (value `live`).
+references resolved to remote URLs and adds `source_body_format` (see
+"Markdown conversion" below for how links, mentions, and macros render). A body
+the converter cannot parse is an inline `markdown_conversion_failed` error, never
+a truncated body. `--resolve-authors` adds an `author_name` sibling (best-effort,
+cached user lookups). A `subtype` field appears only for live docs (value `live`).
 
 ```bash
 confluence page get 123456
@@ -589,6 +595,19 @@ confluence user info a1 a2 a3
 
 Pages are converted from Confluence storage format to Markdown. The page
 hierarchy is preserved as a directory structure.
+
+### Markdown conversion
+
+The same converter serves `page get --body-format markdown`. Confluence-specific
+elements render as:
+
+- `<ac:link>` - label from `ac:link-body` or `ac:plain-text-link-body`. `ri:page` becomes `[label](Title)` (the target is the page title, not a URL; a title with spaces or parentheses is wrapped as `[label](<Page Title>)`). `ri:user` becomes `@<account-id>`, no lookup. `ri:attachment` becomes `[label](href)` resolved like images. `ri:url` becomes `[label](value)`. An anchor-only link emits the label as text.
+- `<ac:structured-macro>` - a macro with an `ac:rich-text-body` (info, note, panel, expand) has its body converted in place. A macro with an `ac:plain-text-body` (code, noformat) becomes a fenced code block. The `status` macro becomes `[status: <title>]`. Any other macro becomes `[macro: <name>]`, or `[macro: <name> <Page Title>]` when it references a page (excerpt-include). No other parameter text appears in the output.
+- Table cells keep inline formatting, links, and mentions on one line.
+
+A body the converter cannot parse is an error, never a truncated body: `page get`
+emits an inline `markdown_conversion_failed` row and `space sync` skips the page
+and counts it in `conversion_errors`.
 
 ### Directory structure
 

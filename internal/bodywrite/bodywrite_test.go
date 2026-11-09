@@ -107,6 +107,20 @@ func TestPrepareStorageSelfClosing(t *testing.T) {
 	}
 }
 
+// Guard: a storage body with <ac:link>...</ac:link> must validate. The strict
+// decoder ignores AutoClose, so this passed before the converter fix too; it
+// pins the behavior in case the decoder setup ever changes.
+func TestPrepareStorageACLink(t *testing.T) {
+	in := `<p>See <ac:link><ri:page ri:content-title="X" /><ac:link-body>X</ac:link-body></ac:link> and <ac:link><ri:user ri:account-id="1" /></ac:link></p>`
+	rep, val, err := Prepare("storage", in)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rep != "storage" || val != in {
+		t.Errorf("got (%q, %q), want (storage, %q)", rep, val, in)
+	}
+}
+
 func TestPrepareStorageEmpty(t *testing.T) {
 	rep, val, err := Prepare("storage", "")
 	if err != nil {

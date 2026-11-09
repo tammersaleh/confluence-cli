@@ -133,14 +133,22 @@ Human-readable progress goes to stderr. Stdout carries a single summary object, 
 
 ```jsonl
 $ confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs
-{"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":false}
+{"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":false,"conversion_errors":0}
 {"_meta":{"has_more":false}}
 ```
 
 ```jsonl
 $ confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs --dry-run
-{"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":true}
+{"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":true,"conversion_errors":0}
 {"_meta":{"has_more":false}}
+```
+
+A page whose storage body the converter cannot parse (see "Markdown conversion" under `page get`) is logged to stderr as a warning and skipped: its existing Markdown file, if any, is left in place (and protected from `--prune`), and its children still sync. `conversion_errors` counts those pages; when it is nonzero the trailer carries `error_count` with the same value and the command exits 1, like any bulk command with per-item failures.
+
+```jsonl
+$ confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs
+{"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":false,"conversion_errors":1}
+{"_meta":{"has_more":false,"error_count":1}}
 ```
 
 ### space info
@@ -251,7 +259,17 @@ Fetch one or more pages by numeric id or page URL. All arguments must resolve to
 - `storage` - Confluence storage format (XHTML), returned as a string.
 - `atlas_doc_format` (alias `adf`) - ADF; the `body` field is a nested JSON object, not a string.
 - `view` - rendered view HTML, as a string.
-- `markdown` (alias `md`) - derived by converting the storage body to GFM, with attachment references resolved to absolute remote URLs. Costs one extra API call per page to list attachments. Adds `source_body_format:"storage"` and sets `body_format:"markdown"`.
+- `markdown` (alias `md`) - derived by converting the storage body to GFM, with attachment references resolved to absolute remote URLs. Costs one extra API call per page to list attachments. Adds `source_body_format:"storage"` and sets `body_format:"markdown"`. A storage body the converter cannot parse is an inline `markdown_conversion_failed` error (bumps `_meta.error_count`, exit 1); the body is never silently truncated. See "Markdown conversion" below.
+
+#### Markdown conversion
+
+The same converter serves `page get --body-format markdown` and `space sync`. Confluence-specific elements render as:
+
+- `<ac:link>` - the label is the `ac:link-body` or `ac:plain-text-link-body` text. `ri:page` becomes `[label](Title)` (label defaults to the title; the target is the page title, not a URL). A title containing spaces or parentheses is wrapped so the link stays valid CommonMark: `[label](<Page Title>)`. `ri:user` becomes `@<account-id>` with no lookup (`@unknown-user` when the id is missing). `ri:attachment` becomes `[label](href)` with the href resolved like images (remote URL for `page get`, `_attachments/<file>` for sync). `ri:url` becomes `[label](value)`. A link with no resource (an anchor) emits the label as plain text.
+- `<ac:structured-macro>` - a macro with an `ac:rich-text-body` (info, note, panel, expand, ...) has that body converted in place and its parameters dropped. A macro with an `ac:plain-text-body` (code, noformat, ...) becomes a fenced code block using the `language` parameter as the info string. The `status` macro becomes `[status: <title>]` (its lozenge text; `[macro: status]` when the title is missing). Any other macro becomes the placeholder `[macro: <name>]`, or `[macro: <name> <Page Title>]` when an `ri:page` appears among its parameters (excerpt-include, include). No other macro parameter text appears in the output.
+- Table cells keep inline formatting, links, and mentions, flattened to one line.
+
+The decoder is non-strict: `<br>`, `<hr>`, and `<img>` may be unclosed, and an element left open is closed at the end of the body. A body that still fails to parse (a stray end tag, a bad entity) is an error; the converter never returns a truncated body.
 
 A `subtype` field appears only when the page is a live doc (value `live`); regular pages omit it. Use this to tell live docs apart and to verify a `page convert-to-live`.
 

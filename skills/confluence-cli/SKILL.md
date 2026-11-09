@@ -97,9 +97,13 @@ confluence space sync https://acme.atlassian.net/wiki/spaces/ENG ./eng-docs
 ```
 
 ```jsonl
-{"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":false}
+{"synced":true,"space":"ENG","output_dir":"./eng-docs","dry_run":false,"conversion_errors":0}
 {"_meta":{"has_more":false}}
 ```
+
+A page whose body cannot be converted is warned about on stderr and skipped
+(existing file kept, children still synced). `conversion_errors` counts them;
+when nonzero the trailer carries `error_count` and the command exits 1.
 
 Preview before writing:
 
@@ -169,6 +173,16 @@ stdout and bump `_meta.error_count`.
 
 `--format` is accepted as an alias of `--body-format` here and on `page create`,
 `page update`, and `comment add`. Prefer `--body-format`.
+
+In derived Markdown, a page link renders as `[label](Title)` (the target is the
+page title, not a URL; a title with spaces or parentheses is wrapped as
+`[label](<Page Title>)`), a user mention as `@<account-id>` (no lookup), a
+status macro as `[status: <title>]`, and any other macro with no rich-text
+body as a placeholder `[macro: <name>]` or `[macro: <name> <Page Title>]`;
+panel-like macros have their body converted in place and code macros become
+fenced blocks. A body the converter cannot parse
+is an inline `markdown_conversion_failed` error (exit 1), never a truncated
+body; fall back to `--body-format storage` or `view` for that page.
 
 `--resolve-authors` adds an `author_name` sibling next to `author_id`
 (best-effort; one cached user lookup per unique author). A `subtype` field
