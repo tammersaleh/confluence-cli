@@ -247,6 +247,10 @@ re-discovery.
 
 Learnings from the build worth keeping.
 
+### Todo directory
+
+`todo/` is untracked by design (work orders for future sessions). Deleting a resolved todo is a plain `rm`, not a commit. When several features merge at once, the docs files (SPEC.md, README.md, CLAUDE.md, SKILL.md) conflict in their command inventories; resolve by keeping both insertions.
+
 ### Pushing
 
 The SSH remote key is fingerprint/touch-gated, so a non-interactive `git push origin` over SSH fails. Push over HTTPS using the gh credential helper instead: run `gh auth setup-git` once, then `git push https://github.com/tammersaleh/confluence-cli.git main:main`.
