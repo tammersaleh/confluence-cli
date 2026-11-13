@@ -225,7 +225,8 @@ follows it:
 - Run `mise run check` after every change; it must pass before committing.
 - MANDATORY code review before push (code changes only; docs-only Markdown edits are exempt). Spawn a `feature-dev:code-reviewer` on the pending diff, address every important finding, re-run to confirm clean. Never push code without a clean review pass.
 - Keep commits small and conventional. Commit type IS the release trigger: `feat:`/`fix:` cut a release; `chore:`/`docs:`/`refactor:`/`test:`/`perf:`/`style:` cut nothing. `feat!:` or a `BREAKING CHANGE:` footer for anything that breaks a caller (removed flags, changed output shape or exit codes).
-- Releases are automated: release-please watches main, opens an auto-merging release PR when a version-bumping commit lands, tags it, and GoReleaser builds binaries and pushes the Homebrew artifact.
+- Releases are automated and gated on tests. `release.yml` runs `verify` (the steps in `ci.yml` plus govulncheck) on every push to main except the release commit itself. Release-please runs only after `verify` passes. A version-bumping commit opens a release PR that merges at once. The merge push cuts the tag, and GoReleaser builds binaries and pushes the Homebrew artifact. Nobody clicks Merge on the release PR.
+- The only PRs are release-please's and Dependabot's. Dependabot opens monthly grouped PRs for `gomod` and `github-actions`, and `pr.yml` merges them once tests pass. A merged bump cuts no release by itself. It ships with the next pushed release. Major versions are ignored, so bump those by hand.
 - The artifact is a Homebrew CASK, not a formula: it lives at `Casks/confluence-cli.rb` in `tammersaleh/homebrew-tap`. Install/upgrade with `brew install --cask tammersaleh/tap/confluence-cli` / `brew upgrade --cask tammersaleh/tap/confluence-cli`.
 - A push is not the finish line. After a release-cutting push, wait for the tag, upgrade the installed cask, and verify `confluence version` against the real artifact before calling a change done.
 - The pre-push hook runs `mise run check`; never bypass with `--no-verify`.
@@ -255,11 +256,17 @@ Learnings from the build worth keeping.
 
 The SSH remote key is fingerprint/touch-gated, so a non-interactive `git push origin` over SSH fails. Push over HTTPS using the gh credential helper instead: run `gh auth setup-git` once, then `git push https://github.com/tammersaleh/confluence-cli.git main:main`.
 
-Exception: changes under `.github/workflows/` need a token with the `workflow` scope. The repo's gh and `RELEASE_PAT` tokens carry only `repo`, so workflow-file changes must be pushed over SSH (with the fingerprint) or with a workflow-scoped token.
+Exception: changes under `.github/workflows/` need a token with the `workflow` scope. Neither the gh token nor `RELEASE_PAT` carries it, so workflow-file changes must be pushed over SSH (with the fingerprint) or with a workflow-scoped token.
 
 ### Release flow
 
-Pushing to main triggers release-please, which opens a release PR that auto-merges on green CI, tags, and lets GoReleaser publish the cask to `tammersaleh/homebrew-tap`. Because release-please's merge advances remote main, fetch and rebase over HTTPS before each subsequent push:
+Three workflow files: `ci.yml` holds the test steps and is reusable only, `pr.yml` calls it for pull requests and merges Dependabot PRs, `release.yml` calls it as `verify` for pushes to main. Jobs in `ci.yml` must stay at `contents: read`. A called workflow cannot request more than its caller grants.
+
+Pushing to main runs `verify`, then release-please, which opens a release PR and merges it at once. The merge push skips `verify`, cuts the tag, and GoReleaser publishes the cask to `tammersaleh/homebrew-tap`.
+
+Two secrets. `RELEASE_PAT` (fine-grained, the six CLI repos, contents and pull requests write) opens and merges the release PR. It cannot write the tap. `HOMEBREW_TAP_TOKEN` (tap repo only) pushes the cask. GoReleaser reads it as `HOMEBREW_TAP_GITHUB_TOKEN`.
+
+Because release-please's merge advances remote main, fetch and rebase over HTTPS before each subsequent push:
 
 ```bash
 git fetch https://github.com/tammersaleh/confluence-cli.git main && git rebase FETCH_HEAD
