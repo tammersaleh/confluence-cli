@@ -286,7 +286,7 @@ Folders are a v2 content type with their own resource; `/wiki/api/v2/pages/{fold
 
 ### Linting
 
-golangci-lint is pinned to v2. v1.64.x predates Go 1.25 and emits false-positive SA5011. gopls "modernize" hints (`interface{}`->`any`, `min`/`max`, `SplitSeq`) are NOT part of the golangci-lint gate; don't chase them.
+golangci-lint is pinned to v2. v1.64.x predates Go 1.25 and emits false-positive SA5011. Go 1.27 needs golangci-lint 2.13 or newer: 2.12.2 fails typecheck on Go 1.27 export data. gopls "modernize" hints (`interface{}`->`any`, `min`/`max`, `SplitSeq`) are NOT part of the golangci-lint gate; don't chase them.
 
 ## Dependencies
 
@@ -295,4 +295,4 @@ Cobra - the migration replaced the old single-command Cobra tool).
 
 ## Go version
 
-Requires Go 1.25 (go.mod declares 1.25.5).
+Requires Go 1.27 (go.mod declares 1.27.0). Go 1.25 is out of security support, so govulncheck findings in its standard library are never fixed.

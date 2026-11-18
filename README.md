@@ -794,4 +794,4 @@ mise run lint          # golangci-lint
 mise run build         # build the confluence binary
 ```
 
-Requires Go 1.25. See `CLAUDE.md` for architecture and the release workflow.
+Requires Go 1.27. See `CLAUDE.md` for architecture and the release workflow.
