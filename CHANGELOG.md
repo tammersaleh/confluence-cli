@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.1](https://github.com/tammersaleh/confluence-cli/compare/v2.4.0...v2.4.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* build with Go 1.27 ([7a3cbdb](https://github.com/tammersaleh/confluence-cli/commit/7a3cbdbdf0fe6123a6930d68a0312e54a077f078))
+
 ## [2.4.0](https://github.com/tammersaleh/confluence-cli/compare/v2.3.1...v2.4.0) (2026-11-09)
 
 
