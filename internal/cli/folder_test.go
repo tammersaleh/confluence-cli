@@ -605,3 +605,122 @@ func TestFolderCreate_ParentURLSelectsSite(t *testing.T) {
 		t.Errorf("row = %v", r)
 	}
 }
+
+// --- page writes on a folder id ---
+
+func TestPageMove_BareFolderIDIsNotAPage(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, _ := newFolderCLI(t, fw)
+
+	err := (&PageMoveCmd{Ref: "777", Parent: "100", IfVersion: 1}).Run(c)
+	oErr := outputErr(t, err)
+	if oErr.Err != "not_a_page" || oErr.Input != "777" {
+		t.Errorf("err = %+v", oErr)
+	}
+	if !strings.Contains(oErr.Hint, "folder move 777") {
+		t.Errorf("hint should point at folder move: %q", oErr.Hint)
+	}
+	if len(fw.v1Moves) != 0 || fw.v2Puts != 0 {
+		t.Errorf("nothing may be written: moves=%v puts=%d", fw.v1Moves, fw.v2Puts)
+	}
+}
+
+func TestPageMove_UnknownSourceStaysPageNotFound(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, _ := newFolderCLI(t, fw)
+
+	err := (&PageMoveCmd{Ref: "999", Parent: "100", IfVersion: 1}).Run(c)
+	if oErr := outputErr(t, err); oErr.Err != "page_not_found" || oErr.Input != "999" {
+		t.Errorf("err = %+v", oErr)
+	}
+}
+
+func TestPageMove_FolderProbeErrorSurfaces(t *testing.T) {
+	fw := &folderWorld{fldForb: true}
+	c, _, _, _ := newFolderCLI(t, fw)
+
+	err := (&PageMoveCmd{Ref: "777", Parent: "100", IfVersion: 1}).Run(c)
+	if oErr := outputErr(t, err); oErr.Err != "forbidden" {
+		t.Errorf("err = %+v", oErr)
+	}
+}
+
+func TestPageMove_FolderURLSourceRejectedLocally(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, server := newFolderCLI(t, fw)
+
+	err := (&PageMoveCmd{Ref: server.URL + "/wiki/spaces/T/folder/777", Parent: "100", IfVersion: 1}).Run(c)
+	oErr := outputErr(t, err)
+	if oErr.Err != "invalid_input" || !strings.Contains(oErr.Hint, "folder move") {
+		t.Errorf("err = %+v", oErr)
+	}
+	if len(fw.paths) != 0 {
+		t.Errorf("a folder URL must fail before any request: %v", fw.paths)
+	}
+}
+
+func TestPageMove_PageURL404DoesNotProbeFolder(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, server := newFolderCLI(t, fw)
+
+	err := (&PageMoveCmd{Ref: server.URL + "/wiki/spaces/T/pages/777", Parent: "100", IfVersion: 1}).Run(c)
+	if oErr := outputErr(t, err); oErr.Err != "page_not_found" {
+		t.Errorf("err = %+v", oErr)
+	}
+	if fw.count("/folders/") != 0 {
+		t.Errorf("typed page URL must not probe folders: %v", fw.paths)
+	}
+}
+
+func TestPageUpdate_BareFolderIDIsNotAPage(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, _ := newFolderCLI(t, fw)
+
+	err := (&PageUpdateCmd{Ref: "777", IfVersion: 1, Title: "New"}).Run(c)
+	oErr := outputErr(t, err)
+	if oErr.Err != "not_a_page" || oErr.Input != "777" {
+		t.Errorf("err = %+v", oErr)
+	}
+	if !strings.Contains(oErr.Hint, "folder get 777") {
+		t.Errorf("hint should point at folder get: %q", oErr.Hint)
+	}
+}
+
+func TestPageUpdate_UnknownIDStaysPageNotFound(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, _ := newFolderCLI(t, fw)
+
+	err := (&PageUpdateCmd{Ref: "999", IfVersion: 1, Title: "New"}).Run(c)
+	if oErr := outputErr(t, err); oErr.Err != "page_not_found" {
+		t.Errorf("err = %+v", oErr)
+	}
+}
+
+func TestPageDelete_BareFolderIDIsNotAPage(t *testing.T) {
+	for _, dryRun := range []bool{true, false} {
+		fw := &folderWorld{}
+		c, out, _, _ := newFolderCLI(t, fw)
+
+		err := (&PageDeleteCmd{Refs: []string{"777", "999"}, Yes: !dryRun, DryRun: dryRun}).Run(c)
+		var exitErr *output.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("dryRun=%v: expected ExitError, got %v", dryRun, err)
+		}
+		lines := parseLines(t, out.String())
+		if len(lines) != 3 {
+			t.Fatalf("dryRun=%v: expected 2 inline errors + meta: %q", dryRun, out.String())
+		}
+		if lines[0]["error"] != "not_a_page" || lines[0]["input"] != "777" {
+			t.Errorf("dryRun=%v: row = %v", dryRun, lines[0])
+		}
+		if hint, _ := lines[0]["hint"].(string); !strings.Contains(hint, "folder delete 777") {
+			t.Errorf("dryRun=%v: hint should point at folder delete: %v", dryRun, lines[0])
+		}
+		if lines[1]["error"] != "page_not_found" || lines[1]["input"] != "999" {
+			t.Errorf("dryRun=%v: unknown id row = %v", dryRun, lines[1])
+		}
+		if len(fw.deleted) != 0 {
+			t.Errorf("dryRun=%v: the folder must not be deleted: %v", dryRun, fw.deleted)
+		}
+	}
+}

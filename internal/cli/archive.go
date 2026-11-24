@@ -128,7 +128,7 @@ func runArchiveOp(cli *CLI, refs []string, op archiveOp) error {
 
 refs:
 	for _, pr := range pairs {
-		pd, oErr := getPageOrExplain(ctx, cli, client, pr)
+		pd, oErr := getPageOrExplain(ctx, cli, client, pr, confluence.BodyFormatStorage, "Only pages can be archived or unarchived with this command.")
 		if oErr != nil {
 			stop, err := fail(pr, oErr, false)
 			if err != nil {
@@ -261,6 +261,9 @@ func awaitLongTask(ctx context.Context, client confluence.Client, taskID string)
 	}
 }
 
+// pageRefHint is the recovery hint for a ref that is not a page id or page URL.
+const pageRefHint = "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123)."
+
 // pageRef binds a caller input to the page id resolved from it. bare marks an
 // id given without a URL, whose content type is therefore unknown.
 type pageRef struct {
@@ -273,7 +276,7 @@ type pageRef struct {
 // site per invocation, and builds the client for that site. It runs before any
 // mutation, so a mixed-site batch can never partially apply.
 func resolvePageRefs(cli *CLI, refs []string) ([]pageRef, confluence.Client, error) {
-	const hint = "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123)."
+	const hint = pageRefHint
 	var pairs []pageRef
 	var urlRefs []confluenceurl.Ref
 	var siteURLArg string
@@ -321,28 +324,37 @@ func resolvePageRefs(cli *CLI, refs []string) ([]pageRef, confluence.Client, err
 	return pairs, client, nil
 }
 
-// getPageOrExplain fetches a page. When a bare id is not a page it probes for
-// a folder, so the caller gets not_a_page instead of a misleading
-// page_not_found: the archive endpoints accept folder ids.
-func getPageOrExplain(ctx context.Context, cli *CLI, client confluence.Client, pr pageRef) (*confluence.PageDetail, *output.Error) {
-	pd, err := client.GetPage(ctx, pr.pageID, confluence.BodyFormatStorage)
-	if err == nil {
-		return pd, nil
+// getPageOrExplain fetches a page in the given body format. When a bare id is
+// not a page it probes for a folder, so the caller gets not_a_page with
+// folderHint instead of a misleading page_not_found. The caller sets Input.
+func getPageOrExplain(ctx context.Context, cli *CLI, client confluence.Client, pr pageRef, format confluence.APIBodyFormat, folderHint string) (*confluence.PageDetail, *output.Error) {
+	pd, err := client.GetPage(ctx, pr.pageID, format)
+	if err != nil {
+		return nil, explainPageError(ctx, cli, client, pr, err, folderHint)
 	}
+	return pd, nil
+}
+
+// explainPageError classifies the failure of a page request. A page 404 on a
+// bare id costs one GetFolder probe: a folder becomes not_a_page, a folder 404
+// keeps the page error, and any other folder failure is the real answer. A
+// typed page URL is a page by construction and is never probed.
+func explainPageError(ctx context.Context, cli *CLI, client confluence.Client, pr pageRef, err error, folderHint string) *output.Error {
 	oErr := cli.ClassifyError(err)
-	if pr.bare && errors.Is(err, confluence.ErrPageNotFound) {
-		switch _, ferr := client.GetFolder(ctx, pr.pageID); {
-		case ferr == nil:
-			oErr = &output.Error{
-				Err:    "not_a_page",
-				Detail: fmt.Sprintf("%s is a folder, not a page", pr.pageID),
-				Hint:   "Only pages can be archived or unarchived with this command.",
-				Code:   output.ExitGeneral,
-			}
-		case errors.Is(ferr, confluence.ErrFolderNotFound):
-		default:
-			oErr = cli.ClassifyError(ferr)
-		}
+	if !pr.bare || !errors.Is(err, confluence.ErrPageNotFound) {
+		return oErr
 	}
-	return nil, oErr
+	switch _, ferr := client.GetFolder(ctx, pr.pageID); {
+	case ferr == nil:
+		return &output.Error{
+			Err:    "not_a_page",
+			Detail: fmt.Sprintf("%s is a folder, not a page", pr.pageID),
+			Hint:   folderHint,
+			Code:   output.ExitGeneral,
+		}
+	case errors.Is(ferr, confluence.ErrFolderNotFound):
+		return oErr
+	default:
+		return cli.ClassifyError(ferr)
+	}
 }

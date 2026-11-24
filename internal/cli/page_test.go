@@ -2487,10 +2487,15 @@ func TestPageMove_VersionConflict(t *testing.T) {
 }
 
 // pageDeleteServer serves the dry-run GET and the DELETE, recording deleted ids.
+// No folders exist, so the folder probe that follows a bare-id 404 also 404s.
 func pageDeleteServer(t *testing.T, notFound map[string]bool, deleted *[]string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const prefix = "/wiki/api/v2/pages/"
+		if strings.HasPrefix(r.URL.Path, "/wiki/api/v2/folders/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if !strings.HasPrefix(r.URL.Path, prefix) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

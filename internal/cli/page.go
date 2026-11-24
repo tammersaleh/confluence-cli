@@ -37,35 +37,52 @@ type PageCmd struct {
 // resolvePageRef derives the site hint and page id from a single ref, which is
 // either a bare page id or a Confluence page URL. A non-page URL is invalid.
 func resolvePageRef(cli *CLI, ref string) (siteHint, pageID string, err error) {
+	siteHint, pr, err := resolveSinglePageRef(cli, ref)
+	return siteHint, pr.pageID, err
+}
+
+// resolveSinglePageRef is resolvePageRef for commands that need to know whether
+// the ref was a bare id (pageRef.bare), the only kind that might turn out to be
+// a folder.
+func resolveSinglePageRef(cli *CLI, ref string) (siteHint string, pr pageRef, err error) {
 	r, matched, perr := confluenceurl.Parse(ref)
 	if matched && perr != nil {
-		return "", "", &output.Error{
+		return "", pageRef{}, &output.Error{
 			Err:    "invalid_input",
 			Detail: perr.Error(),
-			Hint:   "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123).",
+			Hint:   pageRefHint,
 			Input:  ref,
 			Code:   output.ExitGeneral,
 		}
 	}
 	if !matched {
 		// Bare id: no site info.
-		return "", ref, nil
+		return "", pageRef{input: ref, pageID: ref, bare: true}, nil
+	}
+	if r.Kind == confluenceurl.KindFolder {
+		return "", pageRef{}, &output.Error{
+			Err:    "invalid_input",
+			Detail: "URL identifies a folder, not a page",
+			Hint:   "This command takes a page. For a folder use 'confluence folder get', 'confluence folder move', or 'confluence folder delete'.",
+			Input:  ref,
+			Code:   output.ExitGeneral,
+		}
 	}
 	if r.Kind != confluenceurl.KindPage || r.PageID == "" {
-		return "", "", &output.Error{
+		return "", pageRef{}, &output.Error{
 			Err:    "invalid_input",
 			Detail: "URL does not identify a page",
-			Hint:   "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123).",
+			Hint:   pageRefHint,
 			Input:  ref,
 			Code:   output.ExitGeneral,
 		}
 	}
 	if cli.Site != "" {
 		if err := requireSiteMatch(cli.Site, ref); err != nil {
-			return "", "", err
+			return "", pageRef{}, err
 		}
 	}
-	return r.BaseURL, r.PageID, nil
+	return r.BaseURL, pageRef{input: ref, pageID: r.PageID}, nil
 }
 
 type PageListCmd struct {
@@ -459,14 +476,7 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 		return err
 	}
 
-	// pair binds each caller input to the page id resolved from it. bare marks
-	// an untyped id, the only kind that might turn out to be a folder.
-	type pair struct {
-		input  string
-		pageID string
-		bare   bool
-	}
-	var pairs []pair
+	var pairs []pageRef
 	var urlRefs []confluenceurl.Ref
 	var siteURLArg string // a raw URL arg, used for --site match reporting
 
@@ -483,7 +493,7 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 		}
 		if !matched {
 			// Bare id: no site info.
-			pairs = append(pairs, pair{input: arg, pageID: arg, bare: true})
+			pairs = append(pairs, pageRef{input: arg, pageID: arg, bare: true})
 			continue
 		}
 		if r.Kind == confluenceurl.KindFolder {
@@ -506,7 +516,7 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 		}
 		urlRefs = append(urlRefs, r)
 		siteURLArg = arg
-		pairs = append(pairs, pair{input: arg, pageID: r.PageID})
+		pairs = append(pairs, pageRef{input: arg, pageID: r.PageID})
 	}
 
 	siteHint := ""
@@ -544,27 +554,9 @@ func (c *PageGetCmd) Run(cli *CLI) error {
 	p := cli.NewPrinter()
 	errCount := 0
 	for _, pr := range pairs {
-		pd, err := client.GetPage(ctx, pr.pageID, format)
-		if err != nil {
-			oErr := cli.ClassifyError(err)
-			if pr.bare && errors.Is(err, confluence.ErrPageNotFound) {
-				// A bare id may be a folder, which has its own v2 resource. One
-				// probe tells the caller which command to use instead of a
-				// misleading page_not_found. A folder 404 keeps the page error;
-				// any other folder failure is the real answer.
-				switch _, ferr := client.GetFolder(ctx, pr.pageID); {
-				case ferr == nil:
-					oErr = &output.Error{
-						Err:    "not_a_page",
-						Detail: fmt.Sprintf("%s is a folder, not a page", pr.pageID),
-						Hint:   fmt.Sprintf("Use 'confluence folder get %s' to read the folder, or 'confluence page children %s' to list its contents.", pr.pageID, pr.pageID),
-						Code:   output.ExitGeneral,
-					}
-				case errors.Is(ferr, confluence.ErrFolderNotFound):
-				default:
-					oErr = cli.ClassifyError(ferr)
-				}
-			}
+		pd, oErr := getPageOrExplain(ctx, cli, client, pr, format,
+			fmt.Sprintf("Use 'confluence folder get %s' to read the folder, or 'confluence page children %s' to list its contents.", pr.pageID, pr.pageID))
+		if oErr != nil {
 			oErr.Input = pr.input
 			if err := p.PrintItem(oErr.AsItem()); err != nil {
 				return err
@@ -896,10 +888,11 @@ type PageUpdateCmd struct {
 }
 
 func (c *PageUpdateCmd) Run(cli *CLI) error {
-	siteHint, pageID, err := resolvePageRef(cli, c.Ref)
+	siteHint, pr, err := resolveSinglePageRef(cli, c.Ref)
 	if err != nil {
 		return err
 	}
+	pageID := pr.pageID
 
 	body, err := resolveWriteBody(cli, c.BodyFormat)
 	if err != nil {
@@ -929,9 +922,11 @@ func (c *PageUpdateCmd) Run(cli *CLI) error {
 
 	// Preflight: fetch as ADF so a no-body update preserves the body as ADF (not
 	// a lossy storage round-trip), and so we preserve title/status/version.
-	cur, err := client.GetPage(ctx, pageID, confluence.BodyFormatAtlasDoc)
-	if err != nil {
-		return cli.ClassifyError(err)
+	cur, oErr := getPageOrExplain(ctx, cli, client, pr, confluence.BodyFormatAtlasDoc,
+		fmt.Sprintf("'page update' edits pages only. Read the folder with 'confluence folder get %s'.", pageID))
+	if oErr != nil {
+		oErr.Input = c.Ref
+		return oErr
 	}
 	if cur.Version != c.IfVersion {
 		return &output.Error{
@@ -1178,10 +1173,11 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 	// Resolve both refs symmetrically. The source must be a page; the
 	// destination may be a page or a folder. Both resolvers enforce --site
 	// matching for URL refs; here we also reject two URLs on different sites.
-	srcSite, srcID, err := resolvePageRef(cli, c.Ref)
+	srcSite, srcRef, err := resolveSinglePageRef(cli, c.Ref)
 	if err != nil {
 		return err
 	}
+	srcID := srcRef.pageID
 	dst, err := resolveContainerRef(cli, c.Parent)
 	if err != nil {
 		return err
@@ -1221,9 +1217,11 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 	defer cancel()
 
 	// Fetch the source as ADF so the reparent PUT preserves the body exactly.
-	src, err := client.GetPage(ctx, srcID, confluence.BodyFormatAtlasDoc)
-	if err != nil {
-		return cli.ClassifyError(err)
+	src, oErr := getPageOrExplain(ctx, cli, client, srcRef, confluence.BodyFormatAtlasDoc,
+		fmt.Sprintf("Move a folder with 'confluence folder move %s --parent <id|url>'.", srcID))
+	if oErr != nil {
+		oErr.Input = c.Ref
+		return oErr
 	}
 	if src.Version != c.IfVersion {
 		return &output.Error{
@@ -1360,64 +1358,7 @@ type PageDeleteCmd struct {
 }
 
 func (c *PageDeleteCmd) Run(cli *CLI) error {
-	// pair binds each caller input to the page id resolved from it.
-	type pair struct {
-		input  string
-		pageID string
-	}
-	var pairs []pair
-	var urlRefs []confluenceurl.Ref
-	var siteURLArg string
-
-	for _, arg := range c.Refs {
-		r, matched, perr := confluenceurl.Parse(arg)
-		if matched && perr != nil {
-			return &output.Error{
-				Err:    "invalid_input",
-				Detail: perr.Error(),
-				Hint:   "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123).",
-				Input:  arg,
-				Code:   output.ExitGeneral,
-			}
-		}
-		if !matched {
-			pairs = append(pairs, pair{input: arg, pageID: arg})
-			continue
-		}
-		if r.Kind != confluenceurl.KindPage || r.PageID == "" {
-			return &output.Error{
-				Err:    "invalid_input",
-				Detail: "URL does not identify a page",
-				Hint:   "Pass a numeric page id or a page URL (…/wiki/spaces/ENG/pages/123).",
-				Input:  arg,
-				Code:   output.ExitGeneral,
-			}
-		}
-		urlRefs = append(urlRefs, r)
-		siteURLArg = arg
-		pairs = append(pairs, pair{input: arg, pageID: r.PageID})
-	}
-
-	siteHint := ""
-	if len(urlRefs) > 0 {
-		site, cerr := confluenceurl.CommonSite(urlRefs)
-		if cerr != nil {
-			return &output.Error{
-				Err:    "invalid_input",
-				Detail: "all pages must be on one site",
-				Hint:   "Split into one invocation per site.",
-				Code:   output.ExitGeneral,
-			}
-		}
-		siteHint = site
-		if cli.Site != "" {
-			if err := requireSiteMatch(cli.Site, siteURLArg); err != nil {
-				return err
-			}
-		}
-	}
-
-	client, _, err := cli.NewClientForSite(siteHint)
+	pairs, client, err := resolvePageRefs(cli, c.Refs)
 	if err != nil {
 		return err
 	}
@@ -1438,10 +1379,10 @@ func (c *PageDeleteCmd) Run(cli *CLI) error {
 	p := cli.NewPrinter()
 	errCount := 0
 	for _, pr := range pairs {
+		folderHint := fmt.Sprintf("Delete a folder with 'confluence folder delete %s'.", pr.pageID)
 		if c.DryRun {
-			cur, err := client.GetPage(ctx, pr.pageID, confluence.BodyFormatStorage)
-			if err != nil {
-				oErr := cli.ClassifyError(err)
+			cur, oErr := getPageOrExplain(ctx, cli, client, pr, confluence.BodyFormatStorage, folderHint)
+			if oErr != nil {
 				oErr.Input = pr.input
 				if err := p.PrintItem(oErr.AsItem()); err != nil {
 					return err
@@ -1464,7 +1405,7 @@ func (c *PageDeleteCmd) Run(cli *CLI) error {
 		}
 
 		if err := client.DeletePage(ctx, pr.pageID); err != nil {
-			oErr := cli.ClassifyError(err)
+			oErr := explainPageError(ctx, cli, client, pr, err, folderHint)
 			oErr.Input = pr.input
 			if err := p.PrintItem(oErr.AsItem()); err != nil {
 				return err
