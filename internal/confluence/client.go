@@ -1736,24 +1736,45 @@ func (c *client) UpdatePage(ctx context.Context, p UpdatePageParams) (*PageRecor
 	return result.toRecord(c), nil
 }
 
-// MovePage calls the v1 move endpoint:
-// PUT /wiki/rest/api/content/{id}/move/{position}/{targetId}. It is the only
-// public API that moves a published page to another space (the v2 update
+// MoveContent calls the v1 move endpoint:
+// PUT /wiki/rest/api/content/{id}/move/{position}/{targetId}. It moves pages
+// and folders alike. It is the only public API that moves a folder, and the
+// only one that moves a published page to another space (the v2 update
 // endpoint refuses with "Only DRAFT pages can be moved between spaces"). The
-// server returns {"pageId":"<id>"}; anything else is treated as a failure so a
-// silently ignored move cannot report success.
-func (c *client) MovePage(ctx context.Context, pageID string, position MovePosition, targetID string) error {
+// server returns {"pageId":"<id>"} for either kind. Anything else is treated
+// as a failure so a silently ignored move cannot report success.
+//
+// The endpoint's 404 names the missing side in its message. A missing source
+// maps to the kind's not-found sentinel, a missing target to
+// ErrMoveTargetNotFound, and an unrecognized 404 stays the generic ErrNotFound.
+func (c *client) MoveContent(ctx context.Context, kind ContentKind, id string, position MovePosition, targetID string) error {
+	var sourceNotFound error
+	switch kind {
+	case ContentPage:
+		sourceNotFound = ErrPageNotFound
+	case ContentFolder:
+		sourceNotFound = ErrFolderNotFound
+	default:
+		return fmt.Errorf("unsupported move content kind %q", kind)
+	}
 	switch position {
 	case MoveAppend, MoveAbove, MoveBelow:
 	default:
 		return fmt.Errorf("unsupported move position %q", position)
 	}
 
-	path := fmt.Sprintf("/wiki/rest/api/content/%s/move/%s/%s", pageID, position, targetID)
+	path := fmt.Sprintf("/wiki/rest/api/content/%s/move/%s/%s", id, position, targetID)
 	resp, err := c.doRequest(ctx, http.MethodPut, path, nil)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return ErrPageNotFound
+		var se *StatusError
+		if errors.Is(err, ErrNotFound) && errors.As(err, &se) {
+			switch {
+			case strings.Contains(se.Message, "source content provided does not exist"):
+				se.Err = sourceNotFound
+			case strings.Contains(se.Message, "target content provided does not exist"):
+				se.Err = ErrMoveTargetNotFound
+			}
+			return se
 		}
 		return err
 	}
@@ -1765,8 +1786,8 @@ func (c *client) MovePage(ctx context.Context, pageID string, position MovePosit
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return fmt.Errorf("decoding response: %w", err)
 	}
-	if result.PageID != pageID {
-		return fmt.Errorf("%w: move of page %s returned pageId %q", ErrAPIError, pageID, result.PageID)
+	if result.PageID != id {
+		return fmt.Errorf("%w: move of %s %s returned pageId %q", ErrAPIError, kind, id, result.PageID)
 	}
 	return nil
 }

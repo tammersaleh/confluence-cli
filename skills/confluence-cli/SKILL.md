@@ -14,7 +14,7 @@ command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 Both reads and writes ship today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
 `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page unarchive`, `page convert-to-live`,
-`page restrictions get|set|clear`, `folder get`, `folder create`, `folder delete`, `attachment list`,
+`page restrictions get|set|clear`, `folder get`, `folder create`, `folder move`, `folder delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
 `user info`. Read commands are below; writes are under "Writing content". The
@@ -628,6 +628,10 @@ then move it under the team page.
 `--if-version`. If the page is already under the destination, it returns
 `moved:false` with no write.
 
+`page move`, `page update`, and `page delete` take pages only. A bare id that
+is a folder fails with `not_a_page`, and the hint names the folder command to
+use instead.
+
 A same-space move to a page re-sends the exact ADF and bumps the version. A
 cross-space move, or a move into a folder, uses the v1 move endpoint: the body
 is untouched and the version does NOT change (`version` equals
@@ -651,7 +655,7 @@ confluence page move 123456 --parent 777000 --if-version "$version"   # into a f
 {"_meta":{"has_more":false}}
 ```
 
-### Creating and deleting folders
+### Creating, moving, and deleting folders
 
 `folder create --space <key|url> --title <t> [--parent <id|url>]` creates a
 folder under a page or folder (omit `--parent` for the space root). No body.
@@ -660,8 +664,19 @@ folder under a page or folder (omit `--parent` for the space root). No body.
 (move or delete its children) before deleting it; what the API does with a
 non-empty folder's children is unverified.
 
+`folder move <id|url> --parent <id|url>` moves a folder, with its children,
+under a page or folder. There is no `--if-version`: a folder's version never
+changes. It refuses self-parenting and cycles (`invalid_move`), and returns
+`moved:false` with no write when the folder is already under the destination.
+The row has the `page move` shape. For the space root pass the space homepage
+(`space info` returns `homepage_id`). `folder get` shows the new parent on the
+next read. A cross-space folder move is unverified. Errors from the write:
+`destination_not_found`, `folder_not_found`, `not_found` (the 404 names
+neither side), `forbidden`.
+
 ```bash
 confluence folder create --space ENG --title Pillars --parent 123400
+confluence folder move 777000 --parent 200000
 confluence folder delete 777000 --dry-run
 confluence folder delete 777000 --yes
 ```

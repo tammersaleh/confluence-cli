@@ -2395,8 +2395,9 @@ func TestPageMove_CrossSpace_TargetVanished(t *testing.T) {
 	cmd := &PageMoveCmd{Ref: "100", Parent: "200", IfVersion: 5}
 	err := cmd.Run(c)
 	var oErr *output.Error
-	if !errors.As(err, &oErr) || oErr.Err != "page_not_found" {
-		t.Fatalf("expected page_not_found, got %v", err)
+	// The server says the target is gone, so the source page must not be blamed.
+	if !errors.As(err, &oErr) || oErr.Err != "destination_not_found" {
+		t.Fatalf("expected destination_not_found, got %v", err)
 	}
 }
 

@@ -1159,6 +1159,47 @@ func resolveMoveDestination(ctx context.Context, client confluence.Client, dst c
 	return &moveDestination{kind: confluence.ContentFolder, spaceID: f.SpaceID}, nil
 }
 
+// moveSite picks the one site a move runs against from its two refs. Each
+// resolver already enforces --site for a URL ref. This also rejects two URLs
+// on different sites. A bare id contributes no site.
+func moveSite(srcSite, dstSite, input string) (string, error) {
+	if srcSite != "" && dstSite != "" && srcSite != dstSite {
+		return "", &output.Error{
+			Err:    "invalid_input",
+			Detail: "source and destination are on different sites",
+			Hint:   "Both refs must be on one site; a cross-site move is not possible.",
+			Input:  input,
+			Code:   output.ExitGeneral,
+		}
+	}
+	if srcSite != "" {
+		return srcSite, nil
+	}
+	return dstSite, nil
+}
+
+// destinationUnder reports whether the destination (dstID, of kind dstKind)
+// sits under srcID, which would make the move a cycle. It fails closed: an
+// ancestry that cannot be inspected is an error.
+func destinationUnder(ctx context.Context, client confluence.Client, dstKind confluence.ContentKind, dstID, srcID string) (bool, error) {
+	var ancestors []confluence.Page
+	var err error
+	if dstKind == confluence.ContentFolder {
+		ancestors, err = client.GetFolderAncestors(ctx, dstID)
+	} else {
+		ancestors, err = client.GetAncestors(ctx, dstID)
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, a := range ancestors {
+		if a.ID == srcID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (c *PageMoveCmd) Run(cli *CLI) error {
 	if c.IfVersion <= 0 {
 		return &output.Error{
@@ -1170,9 +1211,8 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 		}
 	}
 
-	// Resolve both refs symmetrically. The source must be a page; the
-	// destination may be a page or a folder. Both resolvers enforce --site
-	// matching for URL refs; here we also reject two URLs on different sites.
+	// Resolve both refs symmetrically. The source must be a page. The
+	// destination may be a page or a folder.
 	srcSite, srcRef, err := resolveSinglePageRef(cli, c.Ref)
 	if err != nil {
 		return err
@@ -1182,18 +1222,9 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 	if err != nil {
 		return err
 	}
-	if srcSite != "" && dst.siteHint != "" && srcSite != dst.siteHint {
-		return &output.Error{
-			Err:    "invalid_input",
-			Detail: "source and destination are on different sites",
-			Hint:   "Both refs must be on one site; a cross-site move is not possible.",
-			Input:  c.Ref,
-			Code:   output.ExitGeneral,
-		}
-	}
-	siteHint := srcSite
-	if siteHint == "" {
-		siteHint = dst.siteHint
+	siteHint, err := moveSite(srcSite, dst.siteHint, c.Ref)
+	if err != nil {
+		return err
 	}
 	dstID := dst.id
 
@@ -1263,25 +1294,17 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 	}
 
 	// Reject a cycle: the destination must not be a descendant of the source.
-	// Fail closed if ancestry cannot be inspected.
-	var ancestors []confluence.Page
-	if toFolder {
-		ancestors, err = client.GetFolderAncestors(ctx, dstID)
-	} else {
-		ancestors, err = client.GetAncestors(ctx, dstID)
-	}
+	cycle, err := destinationUnder(ctx, client, dest.kind, dstID, srcID)
 	if err != nil {
 		return cli.ClassifyError(err)
 	}
-	for _, a := range ancestors {
-		if a.ID == srcID {
-			return &output.Error{
-				Err:    "invalid_move",
-				Detail: "destination parent is a descendant of the source page (move would create a cycle)",
-				Hint:   "Pick a destination that is not under the page being moved.",
-				Input:  c.Ref,
-				Code:   output.ExitGeneral,
-			}
+	if cycle {
+		return &output.Error{
+			Err:    "invalid_move",
+			Detail: "destination parent is a descendant of the source page (move would create a cycle)",
+			Hint:   "Pick a destination that is not under the page being moved.",
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
 		}
 	}
 
@@ -1305,7 +1328,7 @@ func (c *PageMoveCmd) Run(cli *CLI) error {
 		// inline-comment anchors are safe) and does NOT bump the version, so
 		// --if-version is enforced only by the preflight above, not at write
 		// time. Attachments follow the page (verified live).
-		if err := client.MovePage(ctx, srcID, confluence.MoveAppend, dstID); err != nil {
+		if err := client.MoveContent(ctx, confluence.ContentPage, srcID, confluence.MoveAppend, dstID); err != nil {
 			return cli.ClassifyError(err)
 		}
 		row["version"] = src.Version

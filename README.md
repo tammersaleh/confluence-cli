@@ -7,7 +7,7 @@ commands are non-interactive and scriptable, built for LLM agents and CI.
 The read and write surface ships today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
 `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page unarchive`, `page convert-to-live`,
-`page restrictions get|set|clear`, `folder get`, `folder create`, `folder delete`, `attachment list`,
+`page restrictions get|set|clear`, `folder get`, `folder create`, `folder move`, `folder delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
 `user info`. The full command surface is implemented. See `SPEC.md` for the full
@@ -351,6 +351,10 @@ or another space, preserving the page ID, history, comments, and attachments.
 `invalid_move`. Already-a-child returns `moved:false` with no write. Rows carry
 `parent_type` (`page` or `folder`).
 
+The source must be a page. A bare id that is a folder fails with `not_a_page`
+and a hint naming `folder move`. `page update` and `page delete` make the same
+check.
+
 A same-space move to a page re-sends the exact ADF and touches only the parent,
 so it does not disturb inline-comment anchors; it bumps the version. A
 cross-space move, or a move into a folder, uses the v1 move endpoint (the only
@@ -516,6 +520,26 @@ row has the `folder get` shape without `input`.
 
 ```bash
 confluence folder create --space ENG --title Pillars --parent 123400
+```
+
+### folder move
+
+Move a folder, with its children, under a different parent page or folder. No
+`--if-version`: a folder's version does not change when it moves. Self-parenting
+and a destination under the source are `invalid_move`. Already-a-child returns
+`moved:false` with no write. The row has the `page move` shape.
+
+For the space root, pass the space homepage as `--parent` (`space info` returns
+`homepage_id`). A cross-space folder move is not verified.
+
+```bash
+confluence folder move 777000 --parent 200000
+confluence folder move 777000 --parent 888000   # into another folder
+```
+
+```jsonl
+{"id":"777000","title":"Pillars","previous_space_id":"98765","space_id":"98765","previous_parent_id":"123400","parent_id":"200000","parent_type":"page","previous_version":1,"version":1,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/folder/777000"}
+{"_meta":{"has_more":false}}
 ```
 
 ### folder delete

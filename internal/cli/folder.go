@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"errors"
+
 	"github.com/tammersaleh/confluence-cli/internal/confluence"
 	"github.com/tammersaleh/confluence-cli/internal/confluenceurl"
 	"github.com/tammersaleh/confluence-cli/internal/output"
@@ -9,6 +11,7 @@ import (
 type FolderCmd struct {
 	Get    FolderGetCmd    `cmd:"" help:"Get one or more folders."`
 	Create FolderCreateCmd `cmd:"" help:"Create a folder."`
+	Move   FolderMoveCmd   `cmd:"" help:"Move a folder under a new parent page or folder."`
 	Delete FolderDeleteCmd `cmd:"" help:"Delete folders (moves to trash)."`
 }
 
@@ -83,7 +86,7 @@ func resolveFolderRef(cli *CLI, ref string) (siteHint, folderID string, err erro
 		return "", "", &output.Error{
 			Err:    "invalid_input",
 			Detail: "URL does not identify a folder",
-			Hint:   "Pass a numeric folder id or a folder URL (…/wiki/spaces/ENG/folder/123). For a page, use 'confluence page get'.",
+			Hint:   "Pass a numeric folder id or a folder URL (…/wiki/spaces/ENG/folder/123). For a page, use the page commands ('confluence page get', 'confluence page move').",
 			Input:  ref,
 			Code:   output.ExitGeneral,
 		}
@@ -246,6 +249,116 @@ func (c *FolderCreateCmd) Run(cli *CLI) error {
 
 	p := cli.NewPrinter()
 	if err := p.PrintItem(folderRow(f)); err != nil {
+		return err
+	}
+	return p.PrintMeta(output.Meta{})
+}
+
+type FolderMoveCmd struct {
+	Ref    string `arg:"" name:"id-or-url" help:"Source folder ID or URL."`
+	Parent string `required:"" help:"Destination parent page or folder ID or URL. For the space root, pass the space homepage."`
+}
+
+func (c *FolderMoveCmd) Run(cli *CLI) error {
+	srcSite, srcID, err := resolveFolderRef(cli, c.Ref)
+	if err != nil {
+		return err
+	}
+	dst, err := resolveContainerRef(cli, c.Parent)
+	if err != nil {
+		return err
+	}
+	siteHint, err := moveSite(srcSite, dst.siteHint, c.Ref)
+	if err != nil {
+		return err
+	}
+	dstID := dst.id
+
+	// Self-parenting is invalid regardless of any remote state.
+	if dstID == srcID {
+		return &output.Error{
+			Err:    "invalid_move",
+			Detail: "a folder cannot be its own parent",
+			Hint:   "Pass a different destination parent.",
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+
+	client, _, err := cli.NewClientForSite(siteHint)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.Context()
+	defer cancel()
+
+	// fail attributes an API failure to the ref it concerns.
+	fail := func(err error, input string) error {
+		oErr := cli.ClassifyError(err)
+		oErr.Input = input
+		return oErr
+	}
+
+	src, err := client.GetFolder(ctx, srcID)
+	if err != nil {
+		return fail(err, c.Ref)
+	}
+	dest, err := resolveMoveDestination(ctx, client, dst)
+	if err != nil {
+		return fail(err, c.Parent)
+	}
+
+	// A folder's version never changes on a move (verified live), so there is
+	// no --if-version and both version fields carry the preflight value.
+	row := map[string]any{
+		"id":                 src.ID,
+		"title":              src.Title,
+		"previous_space_id":  src.SpaceID,
+		"previous_parent_id": src.ParentID,
+		"parent_id":          dstID,
+		"parent_type":        string(dest.kind),
+		"previous_version":   src.Version,
+		"version":            src.Version,
+		"web_url":            src.WebURL,
+	}
+	p := cli.NewPrinter()
+
+	// Already under the destination parent: idempotent success, no write.
+	if src.ParentID == dstID {
+		row["space_id"] = src.SpaceID
+		row["moved"] = false
+		if err := p.PrintItem(row); err != nil {
+			return err
+		}
+		return p.PrintMeta(output.Meta{})
+	}
+
+	cycle, err := destinationUnder(ctx, client, dest.kind, dstID, srcID)
+	if err != nil {
+		return fail(err, c.Parent)
+	}
+	if cycle {
+		return &output.Error{
+			Err:    "invalid_move",
+			Detail: "destination parent is a descendant of the source folder (move would create a cycle)",
+			Hint:   "Pick a destination that is not under the folder being moved.",
+			Input:  c.Ref,
+			Code:   output.ExitGeneral,
+		}
+	}
+
+	// The v1 move endpoint is the only API that moves a folder. The row's
+	// parent and space come from the resolved destination, not a read-back.
+	if err := client.MoveContent(ctx, confluence.ContentFolder, srcID, confluence.MoveAppend, dstID); err != nil {
+		if errors.Is(err, confluence.ErrMoveTargetNotFound) {
+			return fail(err, c.Parent)
+		}
+		return fail(err, c.Ref)
+	}
+	row["space_id"] = dest.spaceID
+	row["moved"] = true
+	if err := p.PrintItem(row); err != nil {
 		return err
 	}
 	return p.PrintMeta(output.Meta{})

@@ -145,7 +145,7 @@ func (m *mockClient) UpdatePage(ctx context.Context, p confluence.UpdatePagePara
 	return nil, nil
 }
 
-func (m *mockClient) MovePage(ctx context.Context, pageID string, position confluence.MovePosition, targetID string) error {
+func (m *mockClient) MoveContent(ctx context.Context, kind confluence.ContentKind, id string, position confluence.MovePosition, targetID string) error {
 	return nil
 }
 

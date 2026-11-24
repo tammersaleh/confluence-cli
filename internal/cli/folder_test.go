@@ -25,7 +25,8 @@ const folderFixture = `{
 }`
 
 // folderWorld is a fake site with one page (100, space s1, version 5, parent
-// 50) and one folder (777, under page 100). It records every request path so
+// 50) and one folder (777, under page 100). For folder moves it also has page
+// 200 (space s1), page 300 (space s2), and folder 888 (under folder 777). It records every request path so
 // tests can assert which endpoints were probed. Pages and folders not listed
 // 404 on every endpoint.
 type folderWorld struct {
@@ -38,6 +39,10 @@ type folderWorld struct {
 	pageForb bool // when set, GET /pages/100 returns 403
 	cycle    bool // when set, folder 777 reports page 100 among its ancestors
 	fldForb  bool // when set, GET /folders/777 returns 403
+
+	folderMoves []string // targets of v1 moves of folder 777
+	moveStatus  int      // when set, the v1 move of folder 777 returns this status
+	moveMessage string   // message body of that failure
 }
 
 func (fw *folderWorld) record(p string) {
@@ -126,6 +131,28 @@ func folderServer(t *testing.T, fw *folderWorld) *httptest.Server {
 				return
 			}
 			_, _ = w.Write([]byte(`{"results":[{"id":"777","title":"Pillars","type":"folder"},{"id":"101","title":"Child","type":"page"}],"_links":{}}`))
+		case p == "/wiki/api/v2/pages/200" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"id":"200","title":"Dest","spaceId":"s1","status":"current","version":{"number":1},"_links":{"webui":"/spaces/T/pages/200/D"}}`))
+		case p == "/wiki/api/v2/pages/200/ancestors":
+			_, _ = w.Write([]byte(`{"results":[{"id":"1","type":"page"}],"_links":{}}`))
+		case p == "/wiki/api/v2/pages/300" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"id":"300","title":"Elsewhere","spaceId":"s2","status":"current","version":{"number":1},"_links":{"webui":"/spaces/U/pages/300/E"}}`))
+		case p == "/wiki/api/v2/pages/300/ancestors":
+			_, _ = w.Write([]byte(`{"results":[],"_links":{}}`))
+		case p == "/wiki/api/v2/folders/888" && r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`{"id":"888","type":"folder","title":"Nested","parentId":"777","parentType":"folder","spaceId":"s1","status":"current","version":{"number":1},"_links":{"webui":"/spaces/T/folder/888"}}`))
+		case p == "/wiki/api/v2/folders/888/ancestors":
+			_, _ = w.Write([]byte(`{"results":[{"id":"1","type":"page"},{"id":"100","type":"page"},{"id":"777","type":"folder"}],"_links":{}}`))
+		case strings.HasPrefix(p, "/wiki/rest/api/content/777/move/append/") && r.Method == http.MethodPut:
+			if fw.moveStatus != 0 {
+				w.WriteHeader(fw.moveStatus)
+				_ = json.NewEncoder(w).Encode(map[string]any{"statusCode": fw.moveStatus, "message": fw.moveMessage})
+				return
+			}
+			fw.mu.Lock()
+			fw.folderMoves = append(fw.folderMoves, strings.TrimPrefix(p, "/wiki/rest/api/content/777/move/append/"))
+			fw.mu.Unlock()
+			_, _ = w.Write([]byte(`{"pageId":"777"}`))
 		case strings.HasPrefix(p, "/wiki/rest/api/content/100/move/append/"):
 			fw.mu.Lock()
 			fw.v1Moves = append(fw.v1Moves, strings.TrimPrefix(p, "/wiki/rest/api/content/100/move/append/"))
@@ -722,5 +749,176 @@ func TestPageDelete_BareFolderIDIsNotAPage(t *testing.T) {
 		if len(fw.deleted) != 0 {
 			t.Errorf("dryRun=%v: the folder must not be deleted: %v", dryRun, fw.deleted)
 		}
+	}
+}
+
+// --- folder move ---
+
+func TestFolderMove_UnderPage(t *testing.T) {
+	fw := &folderWorld{}
+	c, out, _, _ := newFolderCLI(t, fw)
+
+	if err := (&FolderMoveCmd{Ref: "777", Parent: "200"}).Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if len(fw.folderMoves) != 1 || fw.folderMoves[0] != "200" {
+		t.Fatalf("v1 move calls = %v, want [200]", fw.folderMoves)
+	}
+	lines := parseLines(t, out.String())
+	if len(lines) != 2 {
+		t.Fatalf("expected 1 row + meta: %q", out.String())
+	}
+	want := map[string]any{
+		"id": "777", "title": "Pillars", "moved": true,
+		"previous_space_id": "s1", "space_id": "s1",
+		"previous_parent_id": "100", "parent_id": "200", "parent_type": "page",
+		"previous_version": float64(1), "version": float64(1),
+	}
+	for k, v := range want {
+		if lines[0][k] != v {
+			t.Errorf("row[%q] = %v, want %v", k, lines[0][k], v)
+		}
+	}
+	if url, _ := lines[0]["web_url"].(string); !strings.HasSuffix(url, "/spaces/T/folder/777") {
+		t.Errorf("web_url = %v", lines[0]["web_url"])
+	}
+}
+
+func TestFolderMove_URLRefsAndCrossSpace(t *testing.T) {
+	fw := &folderWorld{}
+	c, out, _, server := newFolderCLI(t, fw)
+	// Credentials without a site: only the URL refs name it.
+	t.Setenv("CONFLUENCE_SITE", "")
+
+	cmd := &FolderMoveCmd{Ref: server.URL + "/wiki/spaces/T/folder/777", Parent: server.URL + "/wiki/spaces/U/pages/300"}
+	if err := cmd.Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	r := parseLines(t, out.String())[0]
+	if r["previous_space_id"] != "s1" || r["space_id"] != "s2" || r["parent_id"] != "300" || r["moved"] != true {
+		t.Errorf("row = %v", r)
+	}
+}
+
+func TestFolderMove_SelfParent(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, _ := newFolderCLI(t, fw)
+
+	err := (&FolderMoveCmd{Ref: "777", Parent: "777"}).Run(c)
+	if oErr := outputErr(t, err); oErr.Err != "invalid_move" {
+		t.Errorf("err = %+v", oErr)
+	}
+	if len(fw.paths) != 0 {
+		t.Errorf("self-parent must fail before any request: %v", fw.paths)
+	}
+}
+
+func TestFolderMove_CycleRefused(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, _ := newFolderCLI(t, fw)
+
+	// Folder 888 is under folder 777.
+	err := (&FolderMoveCmd{Ref: "777", Parent: "888"}).Run(c)
+	if oErr := outputErr(t, err); oErr.Err != "invalid_move" {
+		t.Errorf("err = %+v", oErr)
+	}
+	if len(fw.folderMoves) != 0 {
+		t.Errorf("cycle must not move: %v", fw.folderMoves)
+	}
+}
+
+func TestFolderMove_NoopWhenAlreadyChild(t *testing.T) {
+	fw := &folderWorld{}
+	c, out, _, _ := newFolderCLI(t, fw)
+
+	if err := (&FolderMoveCmd{Ref: "777", Parent: "100"}).Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if len(fw.folderMoves) != 0 {
+		t.Errorf("already-child must not move: %v", fw.folderMoves)
+	}
+	r := parseLines(t, out.String())[0]
+	if r["moved"] != false || r["parent_id"] != "100" || r["previous_parent_id"] != "100" || r["parent_type"] != "page" || r["version"] != float64(1) {
+		t.Errorf("row = %v", r)
+	}
+}
+
+func TestFolderMove_UnknownSource(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, _ := newFolderCLI(t, fw)
+
+	err := (&FolderMoveCmd{Ref: "999", Parent: "200"}).Run(c)
+	if oErr := outputErr(t, err); oErr.Err != "folder_not_found" || oErr.Input != "999" {
+		t.Errorf("err = %+v", oErr)
+	}
+}
+
+func TestFolderMove_UnknownDestination(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, _ := newFolderCLI(t, fw)
+
+	err := (&FolderMoveCmd{Ref: "777", Parent: "999"}).Run(c)
+	if oErr := outputErr(t, err); oErr.Err != "page_not_found" || oErr.Input != "999" {
+		t.Errorf("err = %+v", oErr)
+	}
+}
+
+func TestFolderMove_PageURLSourceRejectedLocally(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, server := newFolderCLI(t, fw)
+
+	err := (&FolderMoveCmd{Ref: server.URL + "/wiki/spaces/T/pages/100", Parent: "200"}).Run(c)
+	oErr := outputErr(t, err)
+	if oErr.Err != "invalid_input" || !strings.Contains(oErr.Hint, "page move") {
+		t.Errorf("err = %+v", oErr)
+	}
+	if len(fw.paths) != 0 {
+		t.Errorf("a page URL must fail before any request: %v", fw.paths)
+	}
+}
+
+func TestFolderMove_DifferentSitesRejected(t *testing.T) {
+	fw := &folderWorld{}
+	c, _, _, _ := newFolderCLI(t, fw)
+	t.Setenv("CONFLUENCE_SITE", "")
+
+	cmd := &FolderMoveCmd{
+		Ref:    "https://one.example.net/wiki/spaces/T/folder/777",
+		Parent: "https://two.example.net/wiki/spaces/T/pages/200",
+	}
+	if oErr := outputErr(t, cmd.Run(c)); oErr.Err != "invalid_input" {
+		t.Errorf("err = %+v", oErr)
+	}
+	if len(fw.paths) != 0 {
+		t.Errorf("a cross-site move must fail before any request: %v", fw.paths)
+	}
+}
+
+func TestFolderMove_ServerFailures(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		message string
+		want    string
+		input   string // the ref the failure is attributed to
+	}{
+		{"destination vanished", 404, "NotFoundException: The target content provided does not exist.", "destination_not_found", "200"},
+		{"source vanished", 404, "NotFoundException: The source content provided does not exist.", "folder_not_found", "777"},
+		{"neither side named", 404, "no such content", "not_found", "777"},
+		{"no permission", 403, "PermissionException: You do not have permission to make this content move.", "forbidden", "777"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fw := &folderWorld{moveStatus: tt.status, moveMessage: tt.message}
+			c, out, _, _ := newFolderCLI(t, fw)
+
+			err := (&FolderMoveCmd{Ref: "777", Parent: "200"}).Run(c)
+			if oErr := outputErr(t, err); oErr.Err != tt.want || oErr.Input != tt.input {
+				t.Errorf("err = %+v", oErr)
+			}
+			if out.Len() != 0 {
+				t.Errorf("a failed move must print no row: %q", out.String())
+			}
+		})
 	}
 }

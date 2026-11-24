@@ -18,6 +18,11 @@ var (
 	ErrUnauthorized       = errors.New("unauthorized")
 	ErrForbidden          = errors.New("forbidden")
 	ErrAPIError           = errors.New("API error")
+
+	// ErrMoveTargetNotFound is the v1 move endpoint's 404 for the destination.
+	// It is distinct from the source's not-found sentinel so a vanished
+	// destination is never reported as the moved content not existing.
+	ErrMoveTargetNotFound = errors.New("move destination not found")
 	// ErrVersionConflict is returned only by UpdatePage when the server rejects
 	// the write with HTTP 409 (a concurrent edit landed between the caller's
 	// read and this write). It is not applied to 409s from other endpoints.
@@ -317,10 +322,11 @@ type Client interface {
 	GetContentParent(ctx context.Context, id string, contentType string) (*Page, error)
 	CreatePage(ctx context.Context, p CreatePageParams) (*PageRecord, error)
 	UpdatePage(ctx context.Context, p UpdatePageParams) (*PageRecord, error)
-	// MovePage moves pageID relative to targetID via the v1 move endpoint, the
-	// only public API that moves a published page across spaces. It does not
-	// touch the body and does not bump the version.
-	MovePage(ctx context.Context, pageID string, position MovePosition, targetID string) error
+	// MoveContent moves a page or folder relative to targetID via the v1 move
+	// endpoint, the only public API that moves a folder, moves a page into a
+	// folder, or moves a published page across spaces. It does not touch the
+	// body and does not bump the version.
+	MoveContent(ctx context.Context, kind ContentKind, id string, position MovePosition, targetID string) error
 	DeletePage(ctx context.Context, pageID string) error
 	// ArchivePage submits one page to the v1 archive endpoint and returns the
 	// id of the long task doing the work. It does not check that the id is a

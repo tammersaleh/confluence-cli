@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page unarchive`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page unarchive`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder move`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
 
 ## Design principles
 
@@ -92,7 +92,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page unarchive`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page unarchive`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder move`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### Body input for writes
 
@@ -435,11 +435,15 @@ confluence page move <id|url> --parent <id|url> --if-version <n>
 
 Move a page under a different parent, in the same space or in another space, preserving the page ID, history, comments, and attachments. The destination may be a page or a folder (bare id, page URL, or folder URL); a bare id is tried as a page first and as a folder only when the page lookup returns `page_not_found`. Both refs must resolve to one site. `--if-version` guards the source page's version as in `page update`.
 
+The source must be a page. A bare id that is a folder fails with `not_a_page` and a hint naming `folder move`. A folder URL is rejected locally with `invalid_input`. `page update` and `page delete` make the same check, with hints naming `folder get` and `folder delete`. The check costs one extra request and only runs after a page lookup (or the delete) returns 404 for a bare id.
+
 Self-parenting and a destination that is a descendant of the source (a cycle) are refused with `invalid_move`. If the page is already under the destination parent, the row carries `moved:false` and no write is issued.
 
 A same-space move is a v2 update that re-sends the page's exact ADF and changes only the parent. It bumps the version, and a concurrent edit fails at write time with `version_conflict`. It does not disturb inline-comment anchors and is not subject to the inline-comment guard.
 
 A cross-space move (destination parent in another space) or a move into a folder (any space) uses the v1 move endpoint, the only public API for either (the v2 update endpoint refuses with "Only DRAFT pages can be moved between spaces" and only takes a page as `parentId`). It does not touch the body and does not bump the version, so `version` equals `previous_version` and `--if-version` is enforced only by the preflight read, not at write time. Attachments and comments move with the page. Whether page restrictions survive a cross-space move has not been verified; check them in Confluence afterwards if they matter. The page's URL changes to the destination space.
+
+The v1 endpoint's 404 says which side is missing. A destination that disappears between the preflight and the write fails with `destination_not_found`, a source that disappears with `page_not_found`. A 404 that names neither is `not_found`. A caller who may not move the page, or may not add to the destination, gets `forbidden` (HTTP 403).
 
 The row carries `id`, `title`, `previous_space_id`, `space_id`, `previous_parent_id`, `parent_id`, `parent_type` (`page` or `folder`), `previous_version`, `version`, `moved`, and `web_url`. `web_url` is the pre-move URL for a cross-space move (the response does not include the new one); `page get` returns the current URL.
 
@@ -636,11 +640,39 @@ $ confluence folder get 777000
 confluence folder create --space <key|url> --title <t> [--parent <id|url>]
 ```
 
-Create a folder. `--space` takes a bare space key or a space/page URL; a URL selects the site. `--parent` nests the folder under an existing page or folder (same site as the space); omit it for the space root. No body. The row has the `folder get` shape without `input`.
+Create a folder. `--space` takes a bare space key or a space/page URL; a URL selects the site. `--parent` nests the folder under an existing page or folder (same site as the space); omit it for the space root (the folder then reports the space homepage as its parent). No body. The row has the `folder get` shape without `input`.
 
 ```jsonl
 $ confluence folder create --space ENG --title Pillars --parent 123400
 {"id":"777000","type":"folder","title":"Pillars","space_id":"98765","status":"current","parent_id":"123400","parent_type":"page","version":1,"author_id":"a1","created_at":"2026-09-28T20:14:30.759Z","created_at_iso":"2026-09-28T20:14:30Z","modified_at":"2026-09-28T20:14:30.759Z","modified_at_iso":"2026-09-28T20:14:30Z","web_url":"https://acme.atlassian.net/wiki/spaces/ENG/folder/777000"}
+{"_meta":{"has_more":false}}
+```
+
+### folder move
+
+```text
+confluence folder move <id|url> --parent <id|url>
+```
+
+Move a folder under a different parent. The folder's children move with it. The source is a numeric folder id or a folder URL. A page URL is rejected locally with `invalid_input`. The destination is a page or a folder (bare id, page URL, or folder URL), resolved as in `page move`. Both refs must resolve to one site.
+
+There is no `--if-version`. A folder's `version` and `modified_at` do not change when it moves, so a version check would guard nothing. `previous_version` and `version` in the row are both the version read before the move.
+
+Self-parenting and a destination under the source folder are refused with `invalid_move` before any write. If the folder is already under the destination, the row carries `moved:false` and no write is issued.
+
+The move uses the v1 move endpoint (`PUT /wiki/rest/api/content/{id}/move/append/{target}`), the only API that moves a folder. The folder is appended after the destination's existing children. Errors from the write: `destination_not_found` or `folder_not_found` when the 404 names the missing side, `not_found` when it names neither, and `forbidden` when the caller may not move the folder or may not add to the destination.
+
+The row has the `page move` shape: `id`, `title`, `previous_space_id`, `space_id`, `previous_parent_id`, `parent_id`, `parent_type`, `previous_version`, `version`, `moved`, `web_url`. `parent_id`, `parent_type`, and `space_id` come from the resolved destination, not from a read after the move. `web_url` is the URL read before the move.
+
+The space root is not a separate target. A folder created without `--parent` reports the space homepage as its parent, so move a folder to the root with `--parent <homepage id>` (`space info` returns `homepage_id`). The space id is not a valid target.
+
+Verified live, same space: folder under a page, folder under a folder, child pages and child folders follow, view and edit restrictions on a child page survive, and `folder get` shows the new parent on the next read.
+
+Not verified: a cross-space folder move. The command does not refuse one. Check the folder's children and their restrictions afterwards.
+
+```jsonl
+$ confluence folder move 777000 --parent 200000
+{"id":"777000","title":"Pillars","previous_space_id":"98765","space_id":"98765","previous_parent_id":"123400","parent_id":"200000","parent_type":"page","previous_version":1,"version":1,"moved":true,"web_url":"https://acme.atlassian.net/wiki/spaces/ENG/folder/777000"}
 {"_meta":{"has_more":false}}
 ```
 

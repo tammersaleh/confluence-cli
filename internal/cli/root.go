@@ -222,6 +222,13 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Hint:   "Check the folder ID/URL. Fetch a folder with 'confluence folder get <id|url>', or list a page's children with 'confluence page children <id|url>'.",
 			Code:   output.ExitGeneral,
 		}
+	case errors.Is(err, confluence.ErrMoveTargetNotFound):
+		oErr = &output.Error{
+			Err:    "destination_not_found",
+			Detail: err.Error(),
+			Hint:   "The destination parent no longer exists. Check the --parent ID/URL with 'confluence page get <id|url>' or 'confluence folder get <id|url>'.",
+			Code:   output.ExitGeneral,
+		}
 	case errors.Is(err, confluence.ErrSpaceNotFound):
 		oErr = &output.Error{
 			Err:    "space_not_found",
@@ -251,14 +258,15 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Code:   output.ExitGeneral,
 		}
 	case errors.Is(err, confluence.ErrNotFound):
-		// Generic 404 with no resource-specific sentinel. The only path that
-		// reaches here today is ConvertPageToLive, which deliberately leaves a
-		// /cgraphql 404 as the bare ErrNotFound (the endpoint may have moved
-		// rather than the page being missing). Keep a stable code.
+		// Generic 404 with no resource-specific sentinel. Two paths reach here:
+		// ConvertPageToLive, which deliberately leaves a /cgraphql 404 as the
+		// bare ErrNotFound (the endpoint may have moved rather than the page
+		// being missing), and MoveContent when the 404 does not say whether the
+		// source or the destination is missing. Keep a stable code.
 		oErr = &output.Error{
 			Err:    "not_found",
 			Detail: err.Error(),
-			Hint:   "The resource or endpoint was not found. For 'page convert-to-live', the undocumented endpoint may have moved or been disabled.",
+			Hint:   "The resource or endpoint was not found. For a move, check both the source and the --parent ref. For 'page convert-to-live', the undocumented endpoint may have moved or been disabled.",
 			Code:   output.ExitGeneral,
 		}
 	case errors.Is(err, confluence.ErrVersionConflict):

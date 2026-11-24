@@ -2687,45 +2687,88 @@ func TestClient_DeletePage(t *testing.T) {
 	}
 }
 
-func TestClient_MovePage(t *testing.T) {
-	var (
-		gotMethod string
-		gotPath   string
-	)
+func TestClient_MoveContent(t *testing.T) {
+	for _, kind := range []ContentKind{ContentPage, ContentFolder} {
+		var (
+			gotMethod string
+			gotPath   string
+		)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotMethod = r.Method
+			gotPath = r.URL.Path
+			w.Write([]byte(`{"pageId":"123"}`))
+		}))
+
+		c := NewClient(server.URL, "test@example.com", "api-token")
+		if err := c.MoveContent(context.Background(), kind, "123", MoveAppend, "456"); err != nil {
+			t.Fatalf("%s: MoveContent() error: %v", kind, err)
+		}
+		if gotMethod != http.MethodPut {
+			t.Errorf("%s: method = %q, want PUT", kind, gotMethod)
+		}
+		if gotPath != "/wiki/rest/api/content/123/move/append/456" {
+			t.Errorf("%s: path = %q, want /wiki/rest/api/content/123/move/append/456", kind, gotPath)
+		}
+		server.Close()
+	}
+}
+
+// The move endpoint's 404 names the missing side in its message. Only a
+// missing source may be reported as the moved content not existing.
+func TestClient_MoveContent_NotFound(t *testing.T) {
+	tests := []struct {
+		name    string
+		kind    ContentKind
+		message string
+		want    error
+		wantNot []error
+	}{
+		{"page source", ContentPage, "com.atlassian.NotFoundException: The source content provided does not exist.", ErrPageNotFound, nil},
+		{"folder source", ContentFolder, "com.atlassian.NotFoundException: The source content provided does not exist.", ErrFolderNotFound, nil},
+		{"page target", ContentPage, "com.atlassian.NotFoundException: The target content provided does not exist.", ErrMoveTargetNotFound, []error{ErrPageNotFound}},
+		{"folder target", ContentFolder, "com.atlassian.NotFoundException: The target content provided does not exist.", ErrMoveTargetNotFound, []error{ErrFolderNotFound}},
+		{"unrecognized", ContentFolder, "no such thing", ErrNotFound, []error{ErrFolderNotFound, ErrPageNotFound, ErrMoveTargetNotFound}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]any{"statusCode": 404, "message": tt.message})
+			}))
+			defer server.Close()
+
+			c := NewClient(server.URL, "test@example.com", "api-token")
+			err := c.MoveContent(context.Background(), tt.kind, "123", MoveAppend, "456")
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("expected %v, got %v", tt.want, err)
+			}
+			for _, not := range tt.wantNot {
+				if errors.Is(err, not) {
+					t.Errorf("error must not be %v: %v", not, err)
+				}
+			}
+			if !strings.Contains(err.Error(), tt.message) {
+				t.Errorf("error should carry the server message, got %v", err)
+			}
+		})
+	}
+}
+
+func TestClient_MoveContent_Forbidden(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotPath = r.URL.Path
-		w.Write([]byte(`{"pageId":"123"}`))
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"statusCode":403,"message":"You do not have permission to make this content move."}`))
 	}))
 	defer server.Close()
 
 	c := NewClient(server.URL, "test@example.com", "api-token")
-	if err := c.MovePage(context.Background(), "123", MoveAppend, "456"); err != nil {
-		t.Fatalf("MovePage() error: %v", err)
-	}
-	if gotMethod != http.MethodPut {
-		t.Errorf("method = %q, want PUT", gotMethod)
-	}
-	if gotPath != "/wiki/rest/api/content/123/move/append/456" {
-		t.Errorf("path = %q, want /wiki/rest/api/content/123/move/append/456", gotPath)
+	err := c.MoveContent(context.Background(), ContentFolder, "123", MoveAppend, "456")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
 	}
 }
 
-func TestClient_MovePage_NotFound(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"statusCode":404,"message":"The target content provided does not exist."}`))
-	}))
-	defer server.Close()
-
-	c := NewClient(server.URL, "test@example.com", "api-token")
-	err := c.MovePage(context.Background(), "123", MoveAppend, "456")
-	if !errors.Is(err, ErrPageNotFound) {
-		t.Fatalf("expected ErrPageNotFound, got %v", err)
-	}
-}
-
-func TestClient_MovePage_BadRequest(t *testing.T) {
+func TestClient_MoveContent_BadRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`{"statusCode":400,"message":"Invalid to perform any move operation where source is same as target"}`))
@@ -2733,7 +2776,7 @@ func TestClient_MovePage_BadRequest(t *testing.T) {
 	defer server.Close()
 
 	c := NewClient(server.URL, "test@example.com", "api-token")
-	err := c.MovePage(context.Background(), "123", MoveAppend, "123")
+	err := c.MoveContent(context.Background(), ContentPage, "123", MoveAppend, "123")
 	if !errors.Is(err, ErrAPIError) {
 		t.Fatalf("expected ErrAPIError, got %v", err)
 	}
@@ -2742,23 +2785,26 @@ func TestClient_MovePage_BadRequest(t *testing.T) {
 	}
 }
 
-func TestClient_MovePage_WrongPageIDInResponse(t *testing.T) {
+func TestClient_MoveContent_WrongPageIDInResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"pageId":"999"}`))
 	}))
 	defer server.Close()
 
 	c := NewClient(server.URL, "test@example.com", "api-token")
-	err := c.MovePage(context.Background(), "123", MoveAppend, "456")
+	err := c.MoveContent(context.Background(), ContentFolder, "123", MoveAppend, "456")
 	if !errors.Is(err, ErrAPIError) {
 		t.Fatalf("expected ErrAPIError for mismatched pageId, got %v", err)
 	}
 }
 
-func TestClient_MovePage_InvalidPosition(t *testing.T) {
+func TestClient_MoveContent_InvalidArguments(t *testing.T) {
 	c := NewClient("http://127.0.0.1:0", "test@example.com", "api-token")
-	if err := c.MovePage(context.Background(), "123", MovePosition("sideways"), "456"); err == nil {
+	if err := c.MoveContent(context.Background(), ContentPage, "123", MovePosition("sideways"), "456"); err == nil {
 		t.Fatal("expected error for invalid position")
+	}
+	if err := c.MoveContent(context.Background(), ContentKind("database"), "123", MoveAppend, "456"); err == nil {
+		t.Fatal("expected error for unsupported kind")
 	}
 }
 
