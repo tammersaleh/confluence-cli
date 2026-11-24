@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page unarchive`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
 
 ## Design principles
 
@@ -92,7 +92,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page unarchive`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### Body input for writes
 
@@ -493,7 +493,7 @@ $ confluence page delete 123456 --yes
 confluence page archive <id|url>... [--dry-run]
 ```
 
-Archive one or more pages. Archive and trash are different states: an archived page keeps its content, version, and restrictions, and `page get` reports `status:"archived"`. All arguments must resolve to a single site. There is no `--yes`, because the command only archives leaf pages and an archived page can be restored. `--dry-run` runs every check and previews without archiving.
+Archive one or more pages. Archive and trash are different states: an archived page keeps its content, version, and restrictions, and `page get` reports `status:"archived"`. All arguments must resolve to a single site. There is no `--yes`, because the command only archives leaf pages and `page unarchive` restores an archived page. `--dry-run` runs every check and previews without archiving.
 
 The command calls `POST /wiki/rest/api/content/archive` (v1, marked Experimental) once per page, then polls the long task (`GET /wiki/rest/api/longtask/{id}`) until it finishes, honoring `--timeout`. One request per page keeps failures per-item: the endpoint rejects a whole batch when any id in it is invalid.
 
@@ -523,6 +523,28 @@ $ confluence page archive 123456 200000
 {"input":"123456","id":"123456","title":"API Design","archived":true,"status":"archived"}
 {"input":"200000","error":"has_children","detail":"page 200000 has children; archiving it would move them up to its parent","hint":"Archive or move the children first. List them with 'confluence page children 200000'."}
 {"_meta":{"has_more":false,"error_count":1}}
+```
+
+### page unarchive
+
+```text
+confluence page unarchive <id|url>...
+```
+
+Restore one or more archived pages to `status:"current"`. All arguments must resolve to a single site.
+
+No REST endpoint unarchives a page. The command calls the `bulkUnarchivePages` mutation on the Atlassian GraphQL gateway (`POST /gateway/api/graphql`) once per page, without including children, then polls the same long task endpoint as `page archive`, honoring `--timeout`.
+
+A page that is not archived is a no-op row with `unarchived:false` and its current `status`. Nothing is sent. A bare id that is a folder is an inline `not_a_page` error.
+
+Each row echoes the `input` that produced it. Restored rows carry `id`, `title`, `unarchived:true`, and `status:"current"`. Per-item failures appear inline and bump `_meta.error_count`. A mutation that reports a GraphQL error or an unrecognized response, and a task that finishes without explicit success, are both `unarchive_failed`. A deadline that expires after a page was submitted is `unarchive_pending`, with the same contract as `archive_pending`.
+
+The restored page keeps its version and restrictions. Archiving drops the page's parent, so a restored page lands under the space homepage, not under its previous parent. Record `parent_id` before archiving and use `page move` to put the page back.
+
+```jsonl
+$ confluence page unarchive 123456
+{"input":"123456","id":"123456","title":"API Design","unarchived":true,"status":"current"}
+{"_meta":{"has_more":false,"error_count":0}}
 ```
 
 ### page convert-to-live

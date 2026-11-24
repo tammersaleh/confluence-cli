@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
+	"strings"
 )
 
 // LongTask is the state of a v1 long-running task
@@ -89,4 +92,105 @@ func (c *client) GetLongTask(ctx context.Context, taskID string) (*LongTask, err
 		task.Errors = append(task.Errors, string(e))
 	}
 	return task, nil
+}
+
+// unarchiveMutation restores archived pages. The operation is named because
+// the gateway reports an unnamed operation as a top-level error, and the page
+// id travels in variables, never interpolated into the query.
+const unarchiveMutation = `mutation UnarchivePage($ids: [Long]!, $includeChildren: [Boolean]!){ bulkUnarchivePages(pageIDs: $ids, includeChildren: $includeChildren){ status taskId } }`
+
+// UnarchivePage restores one archived page and returns the id of the long task
+// doing the work. Poll it with GetLongTask.
+//
+// No REST endpoint unarchives a page. This calls the bulkUnarchivePages
+// mutation on the Atlassian GraphQL gateway (/gateway/api/graphql), which
+// accepts API-token basic auth. includeChildren needs exactly one entry per
+// page id or the server fails the request. The mutation rejects a page that is
+// not archived, so callers preflight with GetPage.
+//
+// Transport failures and non-2xx statuses keep their StatusError/sentinel
+// classification. Only an HTTP 200 that reports a logical failure or an
+// unrecognized shape yields ErrUnarchiveFailed.
+func (c *client) UnarchivePage(ctx context.Context, pageID string) (string, error) {
+	id, err := strconv.ParseInt(pageID, 10, 64)
+	if err != nil {
+		return "", fmt.Errorf("%w: page id %q is not numeric", ErrAPIError, pageID)
+	}
+	payload := map[string]any{
+		"operationName": "UnarchivePage",
+		"query":         unarchiveMutation,
+		"variables": map[string]any{
+			"ids":             []int64{id},
+			"includeChildren": []bool{false},
+		},
+	}
+	resp, err := c.doJSON(ctx, http.MethodPost, "/gateway/api/graphql", nil, payload)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		// A transport failure while reading the 200 body keeps its own
+		// classification; it is not a logical failure.
+		return "", err
+	}
+	return parseUnarchiveResponse(body)
+}
+
+// parseUnarchiveResponse strictly validates the GraphQL envelope. It fails
+// closed: the submit counts only when there are no top-level errors, the
+// payload is present, status is explicitly true, and a task id came back.
+func parseUnarchiveResponse(body []byte) (string, error) {
+	var env struct {
+		Data *struct {
+			Result *struct {
+				Status *bool  `json:"status"`
+				TaskID string `json:"taskId"`
+			} `json:"bulkUnarchivePages"`
+		} `json:"data"`
+		Errors []struct {
+			Message    string `json:"message"`
+			Extensions struct {
+				Data struct {
+					Errors []struct {
+						Message struct {
+							Key string `json:"key"`
+						} `json:"message"`
+					} `json:"errors"`
+				} `json:"data"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	// json.Unmarshal rejects trailing content after the first JSON value.
+	if err := json.Unmarshal(body, &env); err != nil {
+		return "", fmt.Errorf("%w: could not decode unarchive response", ErrUnarchiveFailed)
+	}
+	if len(env.Errors) > 0 {
+		var msgs []string
+		for _, e := range env.Errors {
+			msg := e.Message
+			// The gateway puts a generic exception in message and the actual
+			// reason in extensions.data.errors[].message.key.
+			for _, de := range e.Extensions.Data.Errors {
+				if de.Message.Key != "" {
+					msg += ": " + de.Message.Key
+				}
+			}
+			if msg != "" {
+				msgs = append(msgs, msg)
+			}
+		}
+		return "", fmt.Errorf("%w: %s", ErrUnarchiveFailed, strings.Join(msgs, "; "))
+	}
+	switch {
+	case env.Data == nil || env.Data.Result == nil:
+		return "", fmt.Errorf("%w: response missing bulkUnarchivePages payload", ErrUnarchiveFailed)
+	case env.Data.Result.Status == nil || !*env.Data.Result.Status:
+		return "", fmt.Errorf("%w: mutation did not report status true", ErrUnarchiveFailed)
+	case env.Data.Result.TaskID == "":
+		return "", fmt.Errorf("%w: mutation returned no task id", ErrUnarchiveFailed)
+	}
+	return env.Data.Result.TaskID, nil
 }

@@ -29,9 +29,12 @@ type archiveWorld struct {
 	postStatus map[string]int      // non-zero: archive POST answers this status
 	tasks      map[string][]string // long-task bodies per page; the last repeats
 
-	archived []string // ids the archive POST accepted
-	gets     map[string]int
-	polls    map[string]int
+	gqlFail map[string]bool // unarchive mutation answers a GraphQL error
+
+	archived   []string // ids the archive POST accepted
+	unarchived []string // ids the unarchive mutation accepted
+	gets       map[string]int
+	polls      map[string]int
 }
 
 const (
@@ -70,6 +73,25 @@ func (w *archiveWorld) server(t *testing.T) *httptest.Server {
 			w.archived = append(w.archived, id)
 			rw.WriteHeader(http.StatusAccepted)
 			_, _ = rw.Write([]byte(`{"id":"t-` + id + `","links":{"status":"/rest/api/longtask/t-` + id + `"}}`))
+		case p == "/gateway/api/graphql" && r.Method == http.MethodPost:
+			var body struct {
+				Variables struct {
+					IDs []json.Number `json:"ids"`
+				} `json:"variables"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if len(body.Variables.IDs) != 1 {
+				t.Errorf("unarchive mutation carried %d ids, want 1", len(body.Variables.IDs))
+				rw.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			id := body.Variables.IDs[0].String()
+			if w.gqlFail[id] {
+				_, _ = rw.Write([]byte(`{"errors":[{"message":"ServiceException: boom"}],"data":{"bulkUnarchivePages":null}}`))
+				return
+			}
+			w.unarchived = append(w.unarchived, id)
+			_, _ = rw.Write([]byte(`{"data":{"bulkUnarchivePages":{"status":true,"taskId":"t-` + id + `"}}}`))
 		case strings.HasPrefix(p, "/wiki/rest/api/longtask/t-"):
 			id := strings.TrimPrefix(p, "/wiki/rest/api/longtask/t-")
 			seq := w.tasks[id]
@@ -344,5 +366,110 @@ func TestPageArchive_MixedSiteRejected(t *testing.T) {
 	var oErr *output.Error
 	if !errors.As(err, &oErr) || oErr.Err != "invalid_input" {
 		t.Fatalf("error = %v, want invalid_input", err)
+	}
+}
+
+func TestPageUnarchive_UnarchivesAndPolls(t *testing.T) {
+	w := &archiveWorld{
+		statuses: map[string][]string{"1": {"archived"}},
+		tasks:    map[string][]string{"1": {taskRunning, taskFinished}},
+	}
+	lines, err := runArchive(t, w, func(c *CLI) error {
+		return (&PageUnarchiveCmd{Refs: []string{"1"}}).Run(c)
+	})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if strings.Join(w.unarchived, ",") != "1" {
+		t.Errorf("unarchived = %v, want one mutation for page 1", w.unarchived)
+	}
+	if w.polls["1"] != 2 {
+		t.Errorf("polls = %d, want 2", w.polls["1"])
+	}
+	row := lines[0]
+	if row["input"] != "1" || row["id"] != "1" || row["title"] != "Page 1" || row["unarchived"] != true || row["status"] != "current" {
+		t.Errorf("row unexpected: %v", row)
+	}
+}
+
+func TestPageUnarchive_NotArchivedIsNoOp(t *testing.T) {
+	w := &archiveWorld{}
+	lines, err := runArchive(t, w, func(c *CLI) error {
+		return (&PageUnarchiveCmd{Refs: []string{"1"}}).Run(c)
+	})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if len(w.unarchived) != 0 {
+		t.Errorf("a current page must not be submitted, got %v", w.unarchived)
+	}
+	if row := lines[0]; row["unarchived"] != false || row["status"] != "current" {
+		t.Errorf("no-op row unexpected: %v", row)
+	}
+}
+
+func TestPageUnarchive_FolderIsNotAPage(t *testing.T) {
+	w := &archiveWorld{folders: map[string]bool{"1": true}}
+	lines, err := runArchive(t, w, func(c *CLI) error {
+		return (&PageUnarchiveCmd{Refs: []string{"1"}}).Run(c)
+	})
+	if !errors.As(err, new(*output.ExitError)) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	if lines[0]["error"] != "not_a_page" {
+		t.Errorf("row = %v, want not_a_page", lines[0])
+	}
+}
+
+func TestPageUnarchive_MutationFailureInline(t *testing.T) {
+	w := &archiveWorld{
+		statuses: map[string][]string{"1": {"archived"}, "2": {"archived"}},
+		gqlFail:  map[string]bool{"1": true},
+	}
+	lines, err := runArchive(t, w, func(c *CLI) error {
+		return (&PageUnarchiveCmd{Refs: []string{"1", "2"}}).Run(c)
+	})
+	if !errors.As(err, new(*output.ExitError)) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	if lines[0]["error"] != "unarchive_failed" || lines[0]["input"] != "1" {
+		t.Errorf("row = %v, want inline unarchive_failed", lines[0])
+	}
+	if lines[1]["unarchived"] != true {
+		t.Errorf("a failed mutation must not stop later pages: %v", lines[1])
+	}
+}
+
+func TestPageUnarchive_TaskFailure(t *testing.T) {
+	w := &archiveWorld{
+		statuses: map[string][]string{"1": {"archived"}},
+		tasks:    map[string][]string{"1": {taskFailed}},
+	}
+	lines, _ := runArchive(t, w, func(c *CLI) error {
+		return (&PageUnarchiveCmd{Refs: []string{"1"}}).Run(c)
+	})
+	if lines[0]["error"] != "unarchive_failed" {
+		t.Errorf("row = %v, want unarchive_failed", lines[0])
+	}
+}
+
+func TestPageUnarchive_TimeoutAfterSubmitIsPending(t *testing.T) {
+	w := &archiveWorld{
+		statuses: map[string][]string{"1": {"archived"}, "2": {"archived"}},
+		tasks:    map[string][]string{"1": {taskRunning}},
+	}
+	lines, err := runArchive(t, w, func(c *CLI) error {
+		c.Timeout = 100 * time.Millisecond
+		return (&PageUnarchiveCmd{Refs: []string{"1", "2"}}).Run(c)
+	})
+	var exitErr *output.ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != output.ExitNetwork {
+		t.Fatalf("error = %v, want *output.ExitError with the timeout code", err)
+	}
+	if lines[0]["error"] != "unarchive_pending" {
+		t.Fatalf("row = %v, want unarchive_pending", lines[0])
+	}
+	if strings.Join(w.unarchived, ",") != "1" {
+		t.Errorf("unarchived = %v, want page 2 never submitted", w.unarchived)
 	}
 }

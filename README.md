@@ -6,7 +6,7 @@ commands are non-interactive and scriptable, built for LLM agents and CI.
 
 The read and write surface ships today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
-`page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page convert-to-live`,
+`page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page unarchive`, `page convert-to-live`,
 `page restrictions get|set|clear`, `folder get`, `folder create`, `folder delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
@@ -407,6 +407,26 @@ confluence page archive 123456
 
 ```jsonl
 {"input":"123456","id":"123456","title":"API Design","archived":true,"status":"archived"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### page unarchive
+
+Restore archived pages to `status:"current"`. Confluence has no REST endpoint
+for this, so the command calls the `bulkUnarchivePages` mutation on the
+Atlassian GraphQL gateway, one page per request, and waits for each to finish.
+A page that is not archived is a no-op row with `unarchived:false`. All
+arguments must be on one site.
+
+Archiving drops a page's parent. A restored page lands under the space
+homepage, so use `page move` to put it back where it was.
+
+```bash
+confluence page unarchive 123456
+```
+
+```jsonl
+{"input":"123456","id":"123456","title":"API Design","unarchived":true,"status":"current"}
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 

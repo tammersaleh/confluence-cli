@@ -157,6 +157,10 @@ func (m *mockClient) ArchivePage(ctx context.Context, pageID string) (string, er
 	return "", nil
 }
 
+func (m *mockClient) UnarchivePage(ctx context.Context, pageID string) (string, error) {
+	return "", nil
+}
+
 func (m *mockClient) GetLongTask(ctx context.Context, taskID string) (*confluence.LongTask, error) {
 	return nil, nil
 }

@@ -28,6 +28,11 @@ var (
 	// non-2xx statuses keep their StatusError/sentinel classification.
 	ErrLiveConvertFailed = errors.New("live conversion failed")
 
+	// ErrUnarchiveFailed is returned only for HTTP-200 logical or protocol
+	// failures from the gateway's bulkUnarchivePages mutation (GraphQL errors,
+	// status not true, or an unrecognized response shape).
+	ErrUnarchiveFailed = errors.New("unarchive failed")
+
 	// ErrSelfLockout is the server's refusal to apply restrictions that would
 	// remove the caller's own view or edit access.
 	ErrSelfLockout = errors.New("restrictions would lock you out")
@@ -318,6 +323,9 @@ type Client interface {
 	// id of the long task doing the work. It does not check that the id is a
 	// page, has no children, or is not already archived; see the implementation.
 	ArchivePage(ctx context.Context, pageID string) (taskID string, err error)
+	// UnarchivePage restores one archived page through the GraphQL gateway (no
+	// REST endpoint exists) and returns the id of the long task doing the work.
+	UnarchivePage(ctx context.Context, pageID string) (taskID string, err error)
 	// GetLongTask fetches the state of a v1 long-running task.
 	GetLongTask(ctx context.Context, taskID string) (*LongTask, error)
 	// ConvertPageToLive converts an existing page to a live doc. It uses an

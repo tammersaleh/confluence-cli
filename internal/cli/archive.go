@@ -33,6 +33,26 @@ func (c *PageArchiveCmd) Run(cli *CLI) error {
 	})
 }
 
+type PageUnarchiveCmd struct {
+	Refs []string `arg:"" name:"id-or-url" help:"Page IDs or URLs (all on one site)."`
+}
+
+func (c *PageUnarchiveCmd) Run(cli *CLI) error {
+	return runArchiveOp(cli, c.Refs, archiveOp{
+		verb:       "unarchive",
+		doneField:  "unarchived",
+		doneStatus: "current",
+		// The mutation rejects a page that is not archived, so anything else
+		// is a no-op reporting the page's actual status.
+		precheck: func(_ context.Context, _ *CLI, _ confluence.Client, pd *confluence.PageDetail) (bool, *output.Error) {
+			return pd.Status != "archived", nil
+		},
+		submit: func(ctx context.Context, client confluence.Client, pageID string) (string, error) {
+			return client.UnarchivePage(ctx, pageID)
+		},
+	})
+}
+
 // archivePrecheck decides whether a page may be archived. The v1 endpoint
 // archives only the named page and silently reparents its children to the
 // archived page's parent, so a page with any direct child (of any content
@@ -159,8 +179,8 @@ func submitAndWait(ctx context.Context, cli *CLI, client confluence.Client, page
 	taskID, err := op.submit(ctx, client, pageID)
 	if err != nil {
 		// The submit is not idempotent. When a retried request's first attempt
-		// already committed, the retry is rejected ("already archived"), so
-		// trust the page's state over the error.
+		// already committed, the retry is rejected (already archived, or not
+		// archived any more), so trust the page's state over the error.
 		if cur, gerr := client.GetPage(ctx, pageID, confluence.BodyFormatStorage); gerr == nil && cur.Status == op.doneStatus {
 			return nil, false
 		}

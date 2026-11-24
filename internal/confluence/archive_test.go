@@ -140,3 +140,113 @@ func TestClient_GetLongTask_MalformedBody(t *testing.T) {
 		t.Fatal("expected a decode error")
 	}
 }
+
+func TestClient_UnarchivePage_Success(t *testing.T) {
+	var (
+		gotMethod string
+		gotPath   string
+		gotBody   map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{"data":{"bulkUnarchivePages":{"status":true,"taskId":"888"}}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	taskID, err := c.UnarchivePage(context.Background(), "12345")
+	if err != nil {
+		t.Fatalf("UnarchivePage() error: %v", err)
+	}
+	if taskID != "888" {
+		t.Errorf("taskID = %q, want 888", taskID)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/gateway/api/graphql" {
+		t.Errorf("request = %s %s, want POST /gateway/api/graphql", gotMethod, gotPath)
+	}
+	// The gateway warns on unnamed operations, as a top-level error.
+	if gotBody["operationName"] != "UnarchivePage" {
+		t.Errorf("operationName = %v, want UnarchivePage", gotBody["operationName"])
+	}
+	q, _ := gotBody["query"].(string)
+	if !strings.Contains(q, "mutation UnarchivePage(") {
+		t.Errorf("query is not the named operation: %q", q)
+	}
+	if strings.Contains(q, "12345") {
+		t.Errorf("query interpolates the page id: %q", q)
+	}
+	vars, _ := gotBody["variables"].(map[string]any)
+	ids, _ := vars["ids"].([]any)
+	if len(ids) != 1 || ids[0] != float64(12345) {
+		t.Errorf("variables.ids = %v, want [12345] as a number", vars["ids"])
+	}
+	// includeChildren needs exactly one entry per page id.
+	inc, _ := vars["includeChildren"].([]any)
+	if len(inc) != 1 || inc[0] != false {
+		t.Errorf("variables.includeChildren = %v, want [false]", vars["includeChildren"])
+	}
+}
+
+func TestClient_UnarchivePage_NonNumericID(t *testing.T) {
+	c := NewClient("http://127.0.0.1:0", "test@example.com", "api-token")
+	if _, err := c.UnarchivePage(context.Background(), "abc"); !errors.Is(err, ErrAPIError) {
+		t.Fatalf("error = %v, want ErrAPIError before any request", err)
+	}
+}
+
+func TestClient_UnarchivePage_LogicalFailures(t *testing.T) {
+	cases := map[string]string{
+		"top-level errors":       `{"errors":[{"message":"BadRequestException: Incorrect arguments.","extensions":{"statusCode":400,"data":{"errors":[{"message":{"key":"Cannot unarchive pages because some or all pages in the input aren't archived."}}]}}}],"data":{"bulkUnarchivePages":null}}`,
+		"errors beside success":  `{"errors":[{"message":"warning"}],"data":{"bulkUnarchivePages":{"status":true,"taskId":"888"}}}`,
+		"null payload":           `{"data":{"bulkUnarchivePages":null}}`,
+		"missing data":           `{}`,
+		"status false":           `{"data":{"bulkUnarchivePages":{"status":false,"taskId":"888"}}}`,
+		"status absent":          `{"data":{"bulkUnarchivePages":{"taskId":"888"}}}`,
+		"no task id":             `{"data":{"bulkUnarchivePages":{"status":true}}}`,
+		"malformed":              `not json`,
+		"trailing junk":          `{"data":{"bulkUnarchivePages":{"status":true,"taskId":"888"}}} junk`,
+		"wrong mutation in data": `{"data":{"somethingElse":{"status":true,"taskId":"888"}}}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(body))
+			}))
+			defer server.Close()
+
+			c := NewClient(server.URL, "test@example.com", "api-token")
+			_, err := c.UnarchivePage(context.Background(), "1")
+			if !errors.Is(err, ErrUnarchiveFailed) {
+				t.Fatalf("error = %v, want ErrUnarchiveFailed", err)
+			}
+		})
+	}
+}
+
+func TestClient_UnarchivePage_FailureCarriesReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"errors":[{"message":"BadRequestException: Incorrect arguments.","extensions":{"statusCode":400,"data":{"errors":[{"message":{"key":"Cannot unarchive pages because some or all pages in the input aren't archived."}}]}}}],"data":{"bulkUnarchivePages":null}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.UnarchivePage(context.Background(), "1")
+	if err == nil || !strings.Contains(err.Error(), "aren't archived") {
+		t.Errorf("error %v should carry the server's reason", err)
+	}
+}
+
+func TestClient_UnarchivePage_StatusErrorsPreserved(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	_, err := c.UnarchivePage(context.Background(), "1")
+	if !errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrUnarchiveFailed) {
+		t.Fatalf("error = %v, want ErrUnauthorized and not ErrUnarchiveFailed", err)
+	}
+}

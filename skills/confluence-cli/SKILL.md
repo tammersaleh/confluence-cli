@@ -13,7 +13,7 @@ command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 
 Both reads and writes ship today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
-`page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page convert-to-live`,
+`page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page unarchive`, `page convert-to-live`,
 `page restrictions get|set|clear`, `folder get`, `folder create`, `folder delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
@@ -713,6 +713,28 @@ confluence page archive 123456
 
 ```jsonl
 {"input":"123456","id":"123456","title":"API Design","archived":true,"status":"archived"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### Unarchiving a page
+
+`page unarchive <id|url>...` restores archived pages to `status:"current"`,
+one page per request, waiting for each to finish. Version and restrictions are
+kept. A page that is not archived is a no-op row with `unarchived:false`.
+Failures are `unarchive_failed`. A timeout while a restore is still running is
+`unarchive_pending`, same handling as `archive_pending`. Children are not
+included: unarchive each page you archived.
+
+Archiving drops a page's parent, and a restored page lands under the space
+homepage. If the position matters, record `parent_id` with `page get` before
+archiving and `page move` the page back after unarchiving.
+
+```bash
+confluence page unarchive 123456
+```
+
+```jsonl
+{"input":"123456","id":"123456","title":"API Design","unarchived":true,"status":"current"}
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 

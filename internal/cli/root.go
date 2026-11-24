@@ -282,6 +282,13 @@ func (c *CLI) ClassifyError(err error) *output.Error {
 			Hint:   "This uses an undocumented Atlassian endpoint that may change or be blocked; verify the page with 'confluence page get <id>' and check its subtype.",
 			Code:   output.ExitGeneral,
 		}
+	case errors.Is(err, confluence.ErrUnarchiveFailed):
+		oErr = &output.Error{
+			Err:    "unarchive_failed",
+			Detail: err.Error(),
+			Hint:   "Check the page with 'confluence page get <id>' (status). Only an archived page can be unarchived.",
+			Code:   output.ExitGeneral,
+		}
 	case errors.Is(err, confluence.ErrAPIError):
 		oErr = &output.Error{
 			Err:    "api_error",
