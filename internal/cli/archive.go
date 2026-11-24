@@ -99,9 +99,10 @@ type archiveOp struct {
 }
 
 // runArchiveOp applies op to each ref in turn, one request per page, and waits
-// for each long task. Per-page failures go inline. If the deadline expires
-// after a submit succeeded, the page's outcome is unknown: that page gets a
-// <verb>_pending row and the remaining refs are not attempted.
+// for each long task. Per-page failures go inline. The batch stops, keeping
+// the failing row's exit code, when a submitted page's outcome is unknown (a
+// <verb>_pending row) or when the command's context has ended, since every
+// remaining ref would fail the same way.
 func runArchiveOp(cli *CLI, refs []string, op archiveOp) error {
 	pairs, client, err := resolvePageRefs(cli, refs)
 	if err != nil {
@@ -114,18 +115,27 @@ func runArchiveOp(cli *CLI, refs []string, op archiveOp) error {
 	p := cli.NewPrinter()
 	errCount := 0
 	exitCode := output.ExitGeneral
-	fail := func(pr pageRef, oErr *output.Error) error {
+	// fail prints oErr inline. stop reports that the batch cannot continue.
+	fail := func(pr pageRef, oErr *output.Error, pending bool) (stop bool, err error) {
 		oErr.Input = pr.input
 		errCount++
-		return p.PrintItem(oErr.AsItem())
+		if pending || ctx.Err() != nil {
+			exitCode = oErr.Code
+			stop = true
+		}
+		return stop, p.PrintItem(oErr.AsItem())
 	}
 
 refs:
 	for _, pr := range pairs {
 		pd, oErr := getPageOrExplain(ctx, cli, client, pr)
 		if oErr != nil {
-			if err := fail(pr, oErr); err != nil {
+			stop, err := fail(pr, oErr, false)
+			if err != nil {
 				return err
+			}
+			if stop {
+				break refs
 			}
 			continue
 		}
@@ -134,8 +144,12 @@ refs:
 		noop, oErr := op.precheck(ctx, cli, client, pd)
 		switch {
 		case oErr != nil:
-			if err := fail(pr, oErr); err != nil {
+			stop, err := fail(pr, oErr, false)
+			if err != nil {
 				return err
+			}
+			if stop {
+				break refs
 			}
 			continue
 		case noop:
@@ -146,11 +160,11 @@ refs:
 		default:
 			oErr, pending := submitAndWait(ctx, cli, client, pr.pageID, op)
 			if oErr != nil {
-				if err := fail(pr, oErr); err != nil {
+				stop, err := fail(pr, oErr, pending)
+				if err != nil {
 					return err
 				}
-				if pending {
-					exitCode = oErr.Code
+				if stop {
 					break refs
 				}
 				continue
@@ -173,8 +187,8 @@ refs:
 }
 
 // submitAndWait starts op on one page and waits for its long task. pending
-// reports that the submit succeeded but the deadline expired before the task
-// finished, so the outcome is unknown.
+// reports that the operation may have started but its outcome is unknown: the
+// command ended during the submit, or polling the task failed.
 func submitAndWait(ctx context.Context, cli *CLI, client confluence.Client, pageID string, op archiveOp) (oErr *output.Error, pending bool) {
 	taskID, err := op.submit(ctx, client, pageID)
 	if err != nil {
@@ -184,20 +198,20 @@ func submitAndWait(ctx context.Context, cli *CLI, client confluence.Client, page
 		if cur, gerr := client.GetPage(ctx, pageID, confluence.BodyFormatStorage); gerr == nil && cur.Status == op.doneStatus {
 			return nil, false
 		}
-		return cli.ClassifyError(err), false
+		oErr := cli.ClassifyError(err)
+		if ctx.Err() == nil {
+			return oErr, false
+		}
+		// The command ended mid-submit, so the request may have been accepted.
+		oErr.Data = map[string]any{"id": pageID}
+		return pendingError(oErr, op, pageID, "may have been submitted, but the command ended before it was confirmed"), true
 	}
 
 	task, err := awaitLongTask(ctx, client, taskID)
 	if err != nil {
 		oErr := cli.ClassifyError(err)
 		oErr.Data = map[string]any{"id": pageID, "task_id": taskID}
-		if ctx.Err() == nil {
-			return oErr, false
-		}
-		oErr.Err = op.verb + "_pending"
-		oErr.Detail = fmt.Sprintf("%s of page %s was submitted but did not finish before the timeout", op.verb, pageID)
-		oErr.Hint = fmt.Sprintf("The task may still finish. Check with 'confluence page get %s' (status); re-running this command later is safe.", pageID)
-		return oErr, true
+		return pendingError(oErr, op, pageID, "was submitted, but its task could not be followed to completion: "+oErr.Detail), true
 	}
 
 	// Fail closed: only an explicit success with no errors counts.
@@ -217,6 +231,15 @@ func submitAndWait(ctx context.Context, cli *CLI, client confluence.Client, page
 		}, false
 	}
 	return nil, false
+}
+
+// pendingError rewrites a classified error as <verb>_pending, keeping its exit
+// code and data.
+func pendingError(oErr *output.Error, op archiveOp, pageID, what string) *output.Error {
+	oErr.Err = op.verb + "_pending"
+	oErr.Detail = fmt.Sprintf("%s of page %s %s", op.verb, pageID, what)
+	oErr.Hint = fmt.Sprintf("The task may still finish. Check with 'confluence page get %s' (status); re-running this command later is safe.", pageID)
+	return oErr
 }
 
 // awaitLongTask polls a long task until it reports finished or ctx ends. A

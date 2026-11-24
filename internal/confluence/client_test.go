@@ -3242,3 +3242,17 @@ func TestClient_GetPages_Status(t *testing.T) {
 		}
 	}
 }
+
+// The data.errors lookup is best-effort: a body whose "data" is not the v1
+// validation shape must still yield its top-level message.
+func TestExtractAPIMessage_ToleratesOtherDataShapes(t *testing.T) {
+	for _, body := range []string{
+		`{"message":"bad request","data":[]}`,
+		`{"message":"bad request","data":"x"}`,
+		`{"message":"bad request","data":{"errors":[{"message":"plain"}]}}`,
+	} {
+		if got := extractAPIMessage(strings.NewReader(body)); got != "bad request" {
+			t.Errorf("extractAPIMessage(%s) = %q, want %q", body, got, "bad request")
+		}
+	}
+}

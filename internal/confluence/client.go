@@ -231,21 +231,26 @@ func extractAPIMessage(body io.Reader) string {
 			Title  string `json:"title"`
 			Detail string `json:"detail"`
 		} `json:"errors"`
-		Data struct {
-			Errors []struct {
-				Message struct {
-					Key string `json:"key"`
-				} `json:"message"`
-			} `json:"errors"`
-		} `json:"data"`
+		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return ""
 	}
 	if parsed.Message != "" {
-		for _, e := range parsed.Data.Errors {
-			if e.Message.Key != "" {
-				return parsed.Message + ": " + e.Message.Key
+		// Decoded separately so a "data" of any other shape cannot cost the
+		// top-level message.
+		var detail struct {
+			Errors []struct {
+				Message struct {
+					Key string `json:"key"`
+				} `json:"message"`
+			} `json:"errors"`
+		}
+		if json.Unmarshal(parsed.Data, &detail) == nil {
+			for _, e := range detail.Errors {
+				if e.Message.Key != "" {
+					return parsed.Message + ": " + e.Message.Key
+				}
 			}
 		}
 		return parsed.Message

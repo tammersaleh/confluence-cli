@@ -40,6 +40,7 @@ type archiveWorld struct {
 const (
 	taskRunning  = `{"id":"T","successful":false,"finished":false,"messages":[{"translation":""}],"status":"RUNNING","errors":[]}`
 	taskFinished = `{"id":"T","successful":true,"finished":true,"messages":[{"translation":"PageArchivedList :: [1]"}],"status":"FINISH_SUCCESS","errors":[]}`
+	taskGone     = "404" // the long-task GET answers 404
 	taskFailed   = `{"id":"T","successful":false,"finished":true,"messages":[],"status":"FINISH_FAILED","errors":[{"message":"boom"}]}`
 )
 
@@ -102,6 +103,10 @@ func (w *archiveWorld) server(t *testing.T) *httptest.Server {
 			w.polls[id]++
 			if n >= len(seq) {
 				n = len(seq) - 1
+			}
+			if seq[n] == taskGone {
+				rw.WriteHeader(http.StatusNotFound)
+				return
 			}
 			_, _ = rw.Write([]byte(seq[n]))
 		case strings.HasPrefix(p, "/wiki/api/v2/folders/"):
@@ -471,5 +476,50 @@ func TestPageUnarchive_TimeoutAfterSubmitIsPending(t *testing.T) {
 	}
 	if strings.Join(w.unarchived, ",") != "1" {
 		t.Errorf("unarchived = %v, want page 2 never submitted", w.unarchived)
+	}
+}
+
+// A poll that fails after the submit succeeded leaves the outcome unknown, so
+// the page is pending and the batch stops.
+func TestPageArchive_PollErrorAfterSubmitIsPending(t *testing.T) {
+	w := &archiveWorld{tasks: map[string][]string{"1": {taskGone}}}
+	lines, err := runArchive(t, w, func(c *CLI) error {
+		return (&PageArchiveCmd{Refs: []string{"1", "2"}}).Run(c)
+	})
+	var exitErr *output.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	if lines[0]["error"] != "archive_pending" {
+		t.Fatalf("row = %v, want archive_pending", lines[0])
+	}
+	if data, _ := lines[0]["data"].(map[string]any); data["task_id"] != "t-1" {
+		t.Errorf("data = %v, want task_id t-1", data)
+	}
+	if len(lines) != 2 || strings.Join(w.archived, ",") != "1" {
+		t.Errorf("lines = %v, archived = %v, want the batch stopped after page 1", lines, w.archived)
+	}
+}
+
+// A deadline that expires before any submit stops the batch at the first page
+// instead of failing every remaining ref with the same timeout.
+func TestPageArchive_TimeoutBeforeSubmitStopsBatch(t *testing.T) {
+	w := &archiveWorld{}
+	lines, err := runArchive(t, w, func(c *CLI) error {
+		c.Timeout = time.Nanosecond
+		return (&PageArchiveCmd{Refs: []string{"1", "2", "3"}}).Run(c)
+	})
+	var exitErr *output.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected *output.ExitError, got %T: %v", err, err)
+	}
+	if exitErr.Code != output.ExitNetwork {
+		t.Errorf("exit code = %d, want %d (timeout)", exitErr.Code, output.ExitNetwork)
+	}
+	if len(lines) != 2 || lines[0]["input"] != "1" {
+		t.Errorf("lines = %v, want one error row for page 1 and the trailer", lines)
+	}
+	if len(w.archived) != 0 {
+		t.Errorf("archived = %v, want none", w.archived)
 	}
 }
