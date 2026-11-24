@@ -217,7 +217,9 @@ func (c *client) doCore(ctx context.Context, method, path string, opts reqOption
 // extractAPIMessage reads a bounded prefix of an error response body and
 // best-effort extracts a human message from Confluence's error JSON shapes:
 // {"message":"..."} or {"errors":[{"title":"..."}]} or
-// {"errors":[{"detail":"..."}]}. Returns "" on any parse failure.
+// {"errors":[{"detail":"..."}]}. v1 validation failures put a generic exception
+// in "message" and the actual reason in data.errors[].message.key, so that
+// reason is appended when present. Returns "" on any parse failure.
 func extractAPIMessage(body io.Reader) string {
 	data, err := io.ReadAll(io.LimitReader(body, errBodyLimit))
 	if err != nil || len(data) == 0 {
@@ -229,11 +231,23 @@ func extractAPIMessage(body io.Reader) string {
 			Title  string `json:"title"`
 			Detail string `json:"detail"`
 		} `json:"errors"`
+		Data struct {
+			Errors []struct {
+				Message struct {
+					Key string `json:"key"`
+				} `json:"message"`
+			} `json:"errors"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return ""
 	}
 	if parsed.Message != "" {
+		for _, e := range parsed.Data.Errors {
+			if e.Message.Key != "" {
+				return parsed.Message + ": " + e.Message.Key
+			}
+		}
 		return parsed.Message
 	}
 	for _, e := range parsed.Errors {

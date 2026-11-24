@@ -1,6 +1,6 @@
 # confluence CLI Specification
 
-An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
+An agent-first Confluence CLI built in Go. Output is JSONL, one JSON object per line; commands are non-interactive and scriptable. The binary is `confluence`; the repository and Go module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). This document describes the full intended surface. The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today (see "Commands available now"). The full surface from the plan is implemented, including Markdown body input for writes and inline comments.
 
 ## Design principles
 
@@ -92,7 +92,7 @@ Site selection derives the target from a URL argument when the command takes one
 
 ## Commands available now
 
-The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
+The `version`, `space sync`, `space info`, `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`, `page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page convert-to-live`, `page restrictions get`, `page restrictions set`, `page restrictions clear`, `folder get`, `folder create`, `folder delete`, `attachment list`, `attachment download`, `attachment upload`, `search`, `comment list`, `comment add`, `label list`, `label add`, `label remove`, `user current`, and `user info` commands ship today. All honor `--quiet` and `--timeout`.
 
 ### Body input for writes
 
@@ -485,6 +485,44 @@ $ confluence page delete 123456 --dry-run
 $ confluence page delete 123456 --yes
 {"input":"123456","id":"123456","deleted":true,"delete_mode":"trash"}
 {"_meta":{"has_more":false,"error_count":0}}
+```
+
+### page archive
+
+```text
+confluence page archive <id|url>... [--dry-run]
+```
+
+Archive one or more pages. Archive and trash are different states: an archived page keeps its content, version, and restrictions, and `page get` reports `status:"archived"`. All arguments must resolve to a single site. There is no `--yes`, because the command only archives leaf pages and an archived page can be restored. `--dry-run` runs every check and previews without archiving.
+
+The command calls `POST /wiki/rest/api/content/archive` (v1, marked Experimental) once per page, then polls the long task (`GET /wiki/rest/api/longtask/{id}`) until it finishes, honoring `--timeout`. One request per page keeps failures per-item: the endpoint rejects a whole batch when any id in it is invalid.
+
+Each page is checked before it is submitted:
+
+- An already-archived page is a no-op row with `archived:false`. Nothing is sent.
+- A trashed page is an inline `page_trashed` error.
+- A bare id that is a folder is an inline `not_a_page` error. The endpoint itself would archive the folder.
+- A page with any direct child, of any content type, is an inline `has_children` error. The endpoint archives only the named page and moves its children up to the archived page's parent, so the command refuses instead. The check is not atomic: a child created between the check and the request is still moved.
+
+Each row echoes the `input` that produced it. Archived rows carry `id`, `title`, `archived:true`, and `status:"archived"`. No-op rows carry `archived:false` and the current `status`. Dry-run rows carry `id`, `title`, and `would_archive:true`. Per-item failures appear inline and bump `_meta.error_count`.
+
+A task that finishes without explicit success, or with errors, is an inline `archive_failed` error whose `data` carries `id`, `task_id`, `status`, `errors`, and `messages`. If the request itself fails, the command re-reads the page and reports success when the page is archived, because a retried request whose first attempt landed is rejected as already archived.
+
+If `--timeout` expires after a page was submitted but before its task finished, the outcome is unknown. That page gets an inline `archive_pending` error whose `data` carries `id` and `task_id`, the remaining arguments are not attempted, and the command exits `4`. The task may still finish. Check with `page get`. Re-running the command is safe.
+
+Archiving does not bump the page version. An archived page cannot be edited through the API: `page update` and same-space `page move` fail with `api_error`, and `label add` and `comment add` fail with `page_not_found`. `page delete` still works. `page list` and `page tree` include archived pages. `page children` and `page descendants` return nothing for an archived page.
+
+```jsonl
+$ confluence page archive 123456 --dry-run
+{"input":"123456","id":"123456","title":"API Design","would_archive":true}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+```jsonl
+$ confluence page archive 123456 200000
+{"input":"123456","id":"123456","title":"API Design","archived":true,"status":"archived"}
+{"input":"200000","error":"has_children","detail":"page 200000 has children; archiving it would move them up to its parent","hint":"Archive or move the children first. List them with 'confluence page children 200000'."}
+{"_meta":{"has_more":false,"error_count":1}}
 ```
 
 ### page convert-to-live

@@ -6,7 +6,7 @@ commands are non-interactive and scriptable, built for LLM agents and CI.
 
 The read and write surface ships today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
-`page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`,
+`page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page convert-to-live`,
 `page restrictions get|set|clear`, `folder get`, `folder create`, `folder delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
@@ -380,6 +380,33 @@ confluence page delete 123456 --yes
 
 ```jsonl
 {"input":"123456","id":"123456","deleted":true,"delete_mode":"trash"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### page archive
+
+Archive one or more pages. An archived page keeps its content, version, and
+restrictions, and `page get` reports `status:"archived"`. The command sends one
+request per page and waits for each to finish. `--dry-run` previews. All
+arguments must be on one site.
+
+The command refuses a page that has children (`has_children`), because
+Confluence's archive endpoint would move them up to the archived page's parent.
+Archive or move the children first. It also refuses folders (`not_a_page`) and
+trashed pages (`page_trashed`). An already-archived page is a no-op row with
+`archived:false`.
+
+If `--timeout` expires while a page's archive is still running, that page gets
+an `archive_pending` error and the command stops. Check the page with
+`page get` and re-run.
+
+```bash
+confluence page archive 123456 --dry-run
+confluence page archive 123456
+```
+
+```jsonl
+{"input":"123456","id":"123456","title":"API Design","archived":true,"status":"archived"}
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 

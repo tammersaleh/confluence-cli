@@ -153,6 +153,14 @@ func (m *mockClient) DeletePage(ctx context.Context, pageID string) error {
 	return nil
 }
 
+func (m *mockClient) ArchivePage(ctx context.Context, pageID string) (string, error) {
+	return "", nil
+}
+
+func (m *mockClient) GetLongTask(ctx context.Context, taskID string) (*confluence.LongTask, error) {
+	return nil, nil
+}
+
 func (m *mockClient) ConvertPageToLive(ctx context.Context, pageID string) error {
 	return nil
 }

@@ -13,7 +13,7 @@ command ends with a `_meta` trailer: `{"_meta":{"has_more":false}}`.
 
 Both reads and writes ship today: `version`, `space sync`, `space info`,
 `space list`, `auth`, `page list`, `page get`, `page children`, `page descendants`, `page ancestors`,
-`page tree`, `page create`, `page update`, `page move`, `page delete`, `page convert-to-live`,
+`page tree`, `page create`, `page update`, `page move`, `page delete`, `page archive`, `page convert-to-live`,
 `page restrictions get|set|clear`, `folder get`, `folder create`, `folder delete`, `attachment list`,
 `attachment download`, `attachment upload`, `search`, `comment list`,
 `comment add`, `label list`, `label add`, `label remove`, `user current`, and
@@ -677,6 +677,42 @@ confluence page delete 123456 --yes
 
 ```jsonl
 {"input":"123456","id":"123456","deleted":true,"delete_mode":"trash"}
+{"_meta":{"has_more":false,"error_count":0}}
+```
+
+### Archiving a page
+
+`page archive <id|url>...` archives pages. Archive is not trash: the page keeps
+its content, version, and restrictions, and `page get` reports
+`status:"archived"`. One request per page, and the command waits for each to
+finish. All arguments must be on one site. There is no `--yes`.
+
+Checks run before anything is sent:
+
+- A page with any child is refused with `has_children`. Confluence would
+  otherwise move the children up to the archived page's parent. Archive or move
+  the children first (`page children <id>` lists them), leaves before parents.
+- A folder id is `not_a_page`. A trashed page is `page_trashed`.
+- An already-archived page is a no-op row with `archived:false`.
+
+`--dry-run` runs the same checks and emits `would_archive:true`.
+
+If `--timeout` expires while a page is still archiving, that page gets
+`archive_pending` (with `data.task_id`), later arguments are not attempted, and
+the exit code is 4. Check `page get <id> --fields status` and re-run. A task
+that finishes unsuccessfully is `archive_failed`.
+
+An archived page is read-only through the API: `page update` and `page move`
+fail with `api_error`, `label add` and `comment add` fail with
+`page_not_found`. `page list` and `page tree` still include archived pages.
+
+```bash
+confluence page archive 123456 --dry-run
+confluence page archive 123456
+```
+
+```jsonl
+{"input":"123456","id":"123456","title":"API Design","archived":true,"status":"archived"}
 {"_meta":{"has_more":false,"error_count":0}}
 ```
 

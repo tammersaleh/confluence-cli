@@ -314,6 +314,12 @@ type Client interface {
 	// touch the body and does not bump the version.
 	MovePage(ctx context.Context, pageID string, position MovePosition, targetID string) error
 	DeletePage(ctx context.Context, pageID string) error
+	// ArchivePage submits one page to the v1 archive endpoint and returns the
+	// id of the long task doing the work. It does not check that the id is a
+	// page, has no children, or is not already archived; see the implementation.
+	ArchivePage(ctx context.Context, pageID string) (taskID string, err error)
+	// GetLongTask fetches the state of a v1 long-running task.
+	GetLongTask(ctx context.Context, taskID string) (*LongTask, error)
 	// ConvertPageToLive converts an existing page to a live doc. It uses an
 	// undocumented internal Confluence endpoint (no public API exists); see
 	// the implementation for caveats.

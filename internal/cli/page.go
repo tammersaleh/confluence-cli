@@ -28,6 +28,7 @@ type PageCmd struct {
 	Update        PageUpdateCmd        `cmd:"" help:"Update a page (optimistic concurrency)."`
 	Move          PageMoveCmd          `cmd:"" help:"Move a page under a new parent, in the same space or another space (optimistic concurrency)."`
 	Delete        PageDeleteCmd        `cmd:"" help:"Delete pages (moves to trash)."`
+	Archive       PageArchiveCmd       `cmd:"" help:"Archive pages (refuses pages with children)."`
 	ConvertToLive PageConvertToLiveCmd `cmd:"" name:"convert-to-live" help:"Convert pages to live docs (undocumented endpoint; no supported undo)."`
 	Restrictions  PageRestrictionsCmd  `cmd:"" help:"Get, set, or clear a page's view/edit restrictions."`
 }
