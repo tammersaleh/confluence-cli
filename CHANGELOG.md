@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.6.0](https://github.com/tammersaleh/confluence-cli/compare/v2.5.0...v2.6.0) (2026-11-24)
+
+
+### Features
+
+* add folder move ([3f84cd1](https://github.com/tammersaleh/confluence-cli/commit/3f84cd1ab7b5eed471c4698f36cb5b136d634df0))
+
+
+### Bug Fixes
+
+* report not_a_page when a page write is given a folder id ([fec3726](https://github.com/tammersaleh/confluence-cli/commit/fec37263ac0a0782ee87ac9e198bd137395c801e))
+
 ## [2.5.0](https://github.com/tammersaleh/confluence-cli/compare/v2.4.1...v2.5.0) (2026-11-24)
 
 
