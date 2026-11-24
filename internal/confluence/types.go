@@ -78,6 +78,9 @@ type Page struct {
 	ParentID   string
 	ParentType string // "page", "database", "folder", or "" (unknown/root)
 	Type       string // "page", "database", "folder"
+	// Status is "current", "archived", etc. Only the space page listings
+	// (ListPages, GetPages) set it; synthetic folder/database nodes leave it "".
+	Status string
 }
 
 // ContentKind names a v2 content type that can act as a container in the page

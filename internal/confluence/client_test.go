@@ -3187,3 +3187,58 @@ func TestClient_AuthHeader(t *testing.T) {
 		t.Errorf("expected Basic auth, got: %s", gotAuth)
 	}
 }
+
+func TestClient_ListPages_Status(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"results":[{"id":"1","title":"Live","status":"current"},{"id":"2","title":"Old","status":"archived"}],"_links":{}}`))
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	pages, _, err := c.ListPages(context.Background(), "12345", "", 25)
+	if err != nil {
+		t.Fatalf("ListPages() error: %v", err)
+	}
+	if pages[0].Status != "current" || pages[1].Status != "archived" {
+		t.Errorf("statuses = %q, %q, want current, archived", pages[0].Status, pages[1].Status)
+	}
+}
+
+func TestClient_GetPages_Status(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/wiki/api/v2/spaces/12345/pages":
+			w.Write([]byte(`{"results":[{"id":"1","title":"Live","status":"current"},{"id":"2","title":"Old","status":"archived"}],"_links":{}}`))
+		case strings.HasPrefix(r.URL.Path, "/wiki/api/v2/pages/"):
+			id := strings.TrimPrefix(r.URL.Path, "/wiki/api/v2/pages/")
+			if id == "2" {
+				// A folder parent becomes a synthetic node, which has no status.
+				w.Write([]byte(`{"id":"2","title":"Old","parentId":"77","parentType":"folder"}`))
+				return
+			}
+			w.Write([]byte(`{"id":"` + id + `","title":"t"}`))
+		case r.URL.Path == "/wiki/api/v2/folders/77":
+			w.Write([]byte(`{"id":"77","title":"Folder"}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := NewClient(server.URL, "test@example.com", "api-token")
+	pages, err := c.GetPages(context.Background(), "12345")
+	if err != nil {
+		t.Fatalf("GetPages() error: %v", err)
+	}
+	got := map[string]string{}
+	for _, p := range pages {
+		got[p.ID] = p.Type + ":" + p.Status
+	}
+	want := map[string]string{"1": "page:current", "2": "page:archived", "77": "folder:"}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("page %s = %q, want %q (all: %v)", id, got[id], w, got)
+		}
+	}
+}

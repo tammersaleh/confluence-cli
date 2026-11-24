@@ -172,7 +172,8 @@ confluence space list --all
 ### page list
 
 List pages in a space. `--space` takes a bare key or a space/page URL. Use
-`--limit`, `--cursor`, and `--all` to control paging.
+`--limit`, `--cursor`, and `--all` to control paging. Rows carry `status`. The
+listing includes archived pages (`status:"archived"`).
 
 ```bash
 confluence page list --space ENG
@@ -180,7 +181,7 @@ confluence page list --space ENG --all
 ```
 
 ```jsonl
-{"id":"123456","title":"API Design","type":"page","space_key":"ENG","parent_id":"123400"}
+{"id":"123456","title":"API Design","type":"page","space_key":"ENG","status":"current","parent_id":"123400"}
 {"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
 ```
 
@@ -272,7 +273,9 @@ confluence page ancestors 123456
 
 Print a space's page hierarchy in depth-first order. `--space` takes a bare space
 key or a space/page URL. Rows carry `id`, `title`, `type`, and `depth` (0 for
-roots); `parent_id` appears when the page has a parent within the space.
+roots); `parent_id` appears when the page has a parent within the space. Page
+rows carry `status` (archived pages are included). Folder and database nodes
+omit it.
 
 Ordering is by page ID, not Confluence display order. The v2 API doesn't expose
 display order in the crawl, so siblings are sorted by ID for deterministic
@@ -283,8 +286,8 @@ confluence page tree --space ENG
 ```
 
 ```jsonl
-{"id":"123400","title":"Architecture","type":"page","depth":0}
-{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400"}
+{"id":"123400","title":"Architecture","type":"page","depth":0,"status":"current"}
+{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400","status":"current"}
 {"_meta":{"has_more":false}}
 ```
 

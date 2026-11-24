@@ -235,12 +235,12 @@ List pages in a space. `--space` takes a bare space key or a space/page URL; a U
 - `--cursor` - opaque cursor from a prior `_meta.next_cursor`, to fetch the next page.
 - `--all` - loop until the cursor is exhausted, emitting every page. The trailer omits `next_cursor` since nothing remains.
 
-Each row carries `id`, `title`, `type`, and `space_key`; `parent_id` and `parent_type` appear when the page has a parent.
+Each row carries `id`, `title`, `type`, `space_key`, and `status`; `parent_id` and `parent_type` appear when the page has a parent. The listing includes archived pages, which carry `status:"archived"`.
 
 ```jsonl
 $ confluence page list --space ENG
-{"id":"123456","title":"API Design","type":"page","space_key":"ENG","parent_id":"123400"}
-{"id":"123400","title":"Architecture","type":"page","space_key":"ENG"}
+{"id":"123456","title":"API Design","type":"page","space_key":"ENG","status":"current","parent_id":"123400"}
+{"id":"123400","title":"Architecture","type":"page","space_key":"ENG","status":"current"}
 {"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
 ```
 
@@ -371,13 +371,13 @@ Print a space's page hierarchy in depth-first order. `--space` takes a bare spac
 
 Ordering is by page ID, not Confluence display order. The v2 API doesn't expose display order in the crawl, so siblings are sorted by ID for deterministic output; do not rely on this matching the order shown in the Confluence UI.
 
-Each row carries `id`, `title`, `type`, and `depth` (0 for roots); `parent_id` appears when the page has a parent within the space.
+Each row carries `id`, `title`, `type`, and `depth` (0 for roots); `parent_id` appears when the page has a parent within the space. Page rows carry `status`, and the tree includes archived pages (`status:"archived"`). Folder and database nodes omit `status`.
 
 ```jsonl
 $ confluence page tree --space ENG
-{"id":"123400","title":"Architecture","type":"page","depth":0}
-{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400"}
-{"id":"123457","title":"Database Schema","type":"page","depth":1,"parent_id":"123400"}
+{"id":"123400","title":"Architecture","type":"page","depth":0,"status":"current"}
+{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400","status":"current"}
+{"id":"123457","title":"Database Schema","type":"page","depth":1,"parent_id":"123400","status":"archived"}
 {"_meta":{"has_more":false}}
 ```
 
@@ -510,7 +510,7 @@ A task that finishes without explicit success, or with errors, is an inline `arc
 
 If `--timeout` expires after a page was submitted but before its task finished, the outcome is unknown. That page gets an inline `archive_pending` error whose `data` carries `id` and `task_id`, the remaining arguments are not attempted, and the command exits `4`. The task may still finish. Check with `page get`. Re-running the command is safe.
 
-Archiving does not bump the page version. An archived page cannot be edited through the API: `page update` and same-space `page move` fail with `api_error`, and `label add` and `comment add` fail with `page_not_found`. `page delete` still works. `page list` and `page tree` include archived pages. `page children` and `page descendants` return nothing for an archived page.
+Archiving does not bump the page version. An archived page cannot be edited through the API: `page update` and same-space `page move` fail with `api_error`, and `label add` and `comment add` fail with `page_not_found`. `page delete` still works. `page list` and `page tree` include archived pages and mark them with `status:"archived"`. `page children` and `page descendants` return nothing for an archived page.
 
 ```jsonl
 $ confluence page archive 123456 --dry-run

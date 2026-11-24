@@ -147,7 +147,9 @@ confluence space list --all
 ### page list
 
 List pages in a space. `--space` is a bare key or a space/page URL. Page through
-with `--limit`/`--cursor`, or fetch everything with `--all`.
+with `--limit`/`--cursor`, or fetch everything with `--all`. Rows carry
+`status`. Archived pages are included with `status:"archived"`, so filter on
+`status` when you want only live pages.
 
 ```bash
 confluence page list --space ENG
@@ -156,7 +158,7 @@ confluence page list --space ENG --all
 ```
 
 ```jsonl
-{"id":"123456","title":"API Design","type":"page","space_key":"ENG","parent_id":"123400"}
+{"id":"123456","title":"API Design","type":"page","space_key":"ENG","status":"current","parent_id":"123400"}
 {"_meta":{"has_more":true,"next_cursor":"eyJpZCI6..."}}
 ```
 
@@ -286,7 +288,8 @@ confluence page ancestors 123456
 
 Space page hierarchy in depth-first order. `--space` is a bare key or a
 space/page URL. Rows carry `id`, `title`, `type`, `depth` (0 for roots), and
-`parent_id` when the page has a parent within the space.
+`parent_id` when the page has a parent within the space. Page rows carry
+`status` (archived pages are included). Folder and database nodes omit it.
 
 Ordering is by page ID, not Confluence display order - the v2 API doesn't expose
 display order in the crawl, so siblings sort by ID for deterministic output.
@@ -296,8 +299,8 @@ confluence page tree --space ENG
 ```
 
 ```jsonl
-{"id":"123400","title":"Architecture","type":"page","depth":0}
-{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400"}
+{"id":"123400","title":"Architecture","type":"page","depth":0,"status":"current"}
+{"id":"123456","title":"API Design","type":"page","depth":1,"parent_id":"123400","status":"current"}
 {"_meta":{"has_more":false}}
 ```
 
@@ -704,7 +707,8 @@ that finishes unsuccessfully is `archive_failed`.
 
 An archived page is read-only through the API: `page update` and `page move`
 fail with `api_error`, `label add` and `comment add` fail with
-`page_not_found`. `page list` and `page tree` still include archived pages.
+`page_not_found`. `page list` and `page tree` still include archived pages, marked
+`status:"archived"`.
 
 ```bash
 confluence page archive 123456 --dry-run

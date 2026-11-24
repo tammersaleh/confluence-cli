@@ -764,8 +764,9 @@ func (c *client) GetSpaceByID(ctx context.Context, spaceID string) (*Space, erro
 
 type pagesResponse struct {
 	Results []struct {
-		ID    string `json:"id"`
-		Title string `json:"title"`
+		ID     string `json:"id"`
+		Title  string `json:"title"`
+		Status string `json:"status"`
 	} `json:"results"`
 	Links struct {
 		Next string `json:"next"`
@@ -803,8 +804,9 @@ func (c *client) GetPages(ctx context.Context, spaceID string) ([]Page, error) {
 
 		for _, p := range result.Results {
 			allPages = append(allPages, Page{
-				ID:    p.ID,
-				Title: p.Title,
+				ID:     p.ID,
+				Title:  p.Title,
+				Status: p.Status,
 			})
 		}
 
@@ -878,6 +880,7 @@ type listPagesResponse struct {
 		Title      string `json:"title"`
 		ParentID   string `json:"parentId"`
 		ParentType string `json:"parentType"`
+		Status     string `json:"status"`
 	} `json:"results"`
 	Links struct {
 		Next string `json:"next"`
@@ -952,6 +955,7 @@ func (c *client) ListPages(ctx context.Context, spaceID, cursor string, limit in
 			ParentID:   p.ParentID,
 			ParentType: p.ParentType,
 			Type:       "page",
+			Status:     p.Status,
 		})
 	}
 

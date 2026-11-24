@@ -2839,3 +2839,72 @@ func TestPageUpdate_TrailingNullBodyRefused(t *testing.T) {
 		t.Errorf("a PUT was sent with body %q; expected none", cap.bodyVal)
 	}
 }
+
+// statusServer serves a space with a current page, an archived page under a
+// folder, and (for the tree crawl) that folder as a synthetic parent.
+func statusServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/wiki/api/v2/spaces":
+			_, _ = w.Write([]byte(`{"results":[{"id":"12345","key":"ENG","name":"Engineering"}]}`))
+		case "/wiki/api/v2/spaces/12345/pages":
+			_, _ = w.Write([]byte(`{"results":[{"id":"1","title":"Live","status":"current"},{"id":"2","title":"Old","status":"archived","parentId":"77","parentType":"folder"}],"_links":{}}`))
+		case "/wiki/api/v2/pages/1":
+			_, _ = w.Write([]byte(`{"id":"1","title":"Live"}`))
+		case "/wiki/api/v2/pages/2":
+			_, _ = w.Write([]byte(`{"id":"2","title":"Old","parentId":"77","parentType":"folder"}`))
+		case "/wiki/api/v2/folders/77":
+			_, _ = w.Write([]byte(`{"id":"77","title":"Folder"}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+func TestPageList_RowsCarryStatus(t *testing.T) {
+	clearCredEnv(t)
+	server := statusServer(t)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+	if err := (&PageListCmd{Space: "ENG", Limit: 25}).Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	lines := parseLines(t, out.String())
+	if lines[0]["status"] != "current" || lines[1]["status"] != "archived" {
+		t.Errorf("statuses = %v, %v, want current, archived", lines[0]["status"], lines[1]["status"])
+	}
+}
+
+func TestPageTree_RowsCarryStatus(t *testing.T) {
+	clearCredEnv(t)
+	server := statusServer(t)
+	defer server.Close()
+	setEnvCreds(t, server.URL)
+
+	var out, errBuf bytes.Buffer
+	c := newWriteCLI(t, &out, &errBuf, "")
+	if err := (&PageTreeCmd{Space: "ENG"}).Run(c); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	byID := map[string]map[string]any{}
+	for _, l := range parseLines(t, out.String()) {
+		if id, ok := l["id"].(string); ok {
+			byID[id] = l
+		}
+	}
+	if byID["1"]["status"] != "current" || byID["2"]["status"] != "archived" {
+		t.Errorf("page statuses = %v, %v, want current, archived", byID["1"]["status"], byID["2"]["status"])
+	}
+	folder, ok := byID["77"]
+	if !ok {
+		t.Fatalf("synthetic folder node missing: %v", byID)
+	}
+	if _, has := folder["status"]; has {
+		t.Errorf("synthetic folder node must omit status: %v", folder)
+	}
+}

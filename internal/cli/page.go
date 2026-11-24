@@ -117,6 +117,10 @@ func (c *PageListCmd) Run(cli *CLI) error {
 			if pg.ParentType != "" {
 				row["parent_type"] = pg.ParentType
 			}
+			// The listing includes archived pages; status tells them apart.
+			if pg.Status != "" {
+				row["status"] = pg.Status
+			}
 			if err := p.PrintItem(row); err != nil {
 				return err
 			}
@@ -419,6 +423,10 @@ func (c *PageTreeCmd) Run(cli *CLI) error {
 		}
 		if pg.ParentID != "" {
 			row["parent_id"] = pg.ParentID
+		}
+		// Synthetic folder/database nodes carry no status.
+		if pg.Status != "" {
+			row["status"] = pg.Status
 		}
 		if err := p.PrintItem(row); err != nil {
 			return err
