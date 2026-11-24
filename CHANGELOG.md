@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.5.0](https://github.com/tammersaleh/confluence-cli/compare/v2.4.1...v2.5.0) (2026-11-24)
+
+
+### Features
+
+* add page archive ([14f9557](https://github.com/tammersaleh/confluence-cli/commit/14f9557289167db7e408b9f48ea9e08b7d67d76a))
+* add page unarchive ([5824833](https://github.com/tammersaleh/confluence-cli/commit/582483389f62f4090c32a261d58331cd4ac149fc))
+* add status to page list and page tree rows ([c246d01](https://github.com/tammersaleh/confluence-cli/commit/c246d01b3a13698fa7db36325b782b0eccbd1884))
+
+
+### Bug Fixes
+
+* **deps:** bump the gomod group with 2 updates ([#18](https://github.com/tammersaleh/confluence-cli/issues/18)) ([dc0d3cb](https://github.com/tammersaleh/confluence-cli/commit/dc0d3cbe26b2d90459490c87383fbe1a7bbfee08))
+* stop the archive batch when a page's outcome is unknown ([f93824c](https://github.com/tammersaleh/confluence-cli/commit/f93824c9db03de8ba130b0320c0432098e4e7838))
+
 ## [2.4.1](https://github.com/tammersaleh/confluence-cli/compare/v2.4.0...v2.4.1) (2026-11-24)
 
 
