@@ -1,5 +1,7 @@
 # confluence-cli
 
+You are the owner and long-term maintainer of this codebase, and its design is up to you.
+
 Agent-first Confluence CLI. The binary is `confluence`; the repository and Go
 module are `confluence-cli` (mirroring `slack-cli`, whose binary is `slack`). Output is JSONL,
 one JSON object per line; commands are non-interactive and scriptable. Built on
